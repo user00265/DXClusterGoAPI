@@ -1,5 +1,5 @@
 # Stage 1: Build the Go application
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Set build arguments for version info
 ARG BUILD_VERSION=unknown
@@ -26,14 +26,7 @@ RUN CGO_ENABLED=0 go build -ldflags "-X 'github.com/user00265/dxclustergoapi/int
                       -o /dxcluster-go-api ./cmd/dxcluster-client
 
 # Stage 2: Create the final Distroless image
-# Use 'static-debian12' for truly static Go binaries.
-# This assumes glebarez/sqlite (pure Go) which does not require glibc.
-FROM gcr.io/distroless/static-debian12:latest
-
-# Create data directory. This is essential for SQLite DBs.
-# The `static-debian12` image is extremely minimal.
-# os.MkdirAll in our Go app will handle creating this at runtime.
-RUN mkdir -p /data
+FROM gcr.io/distroless/static:latest
 
 # Set working directory for the application
 WORKDIR /app
