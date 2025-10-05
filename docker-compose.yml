@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  dxclustergoapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # These build arguments will be automatically set by Docker Compose
+        # from environment variables (e.g., in your CI/CD pipeline or .env file)
+        # or can be explicitly defined here.
+        # Example: docker build --build-arg BUILD_VERSION=1.0.0 --build-arg GIT_COMMIT=abc1234 .
+        BUILD_VERSION: ${VERSION:-unknown}
+        GIT_COMMIT: ${COMMIT_SHA:-unknown}
+    image: user00265/dxclustergoapi:${VERSION:-latest} # Docker Hub image name (changed to user00265)
+    container_name: dxclustergoapi
+    # Environment variables for application configuration
+    environment:
+      WEBPORT: 8192
+      WEBURL: /
+      MAXCACHE: 500 # Keep more spots in cache
+      DATA_DIR: /data # Path inside container for SQLite DBs
+
+      # DX Cluster Configuration (can be overridden by CLUSTERS JSON)
+      DXHOST: "dxfun.com"
+      DXPORT: "8000"
+      DXCALL: "YOUR_CALLSIGN_HERE" # REQUIRED
+      DXPASSWORD: "" # Leave blank if no password
+
+      # Multiple DX Clusters via JSON array (overrides individual DXHOST/PORT/CALL)
+      # Example: CLUSTERS='[{"host":"dxfun.com","port":"8000","call":"MYCALL","password":"MYPASS","loginPrompt":"login:","cluster":"DXFun"},{"host":"cluster.sota.org.uk","port":"7300","call":"MYCALL","loginPrompt":"login:","cluster":"SOTA"}]'
+      CLUSTERS: '[{"host":"dxfun.com","port":"8000","call":"YOUR_CALLSIGN_HERE","password":"","loginPrompt":"Please enter your call:","cluster":"DXFun"},{"host":"cluster.sota.org.uk","port":"7300","call":"YOUR_CALLSIGN_HERE","loginPrompt":"Please enter your call:","cluster":"SOTA"}]'
+
+      # POTA Integration
+      POTA_INTEGRATION: "true" # "true" or "false"
+      POTA_POLLING_INTERVAL: 1m # e.g., "120s", "2m", "1h"
+
+      # DXCC and LoTW update intervals are still configurable
+      DXCC_UPDATE_INTERVAL: 168h # Weekly update
+      LOTW_UPDATE_INTERVAL: 168h # Weekly update
+
+      # Redis/Valkey Configuration (optional)
+      REDIS_ENABLED: "false" # "true" to enable Redis caching for POTA deduplication
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_USER: "" # Optional
+      REDIS_PASSWORD: "" # Optional
+      REDIS_DB: 0
+      REDIS_USE_TLS: "false"
+      REDIS_INSECURE_SKIP_VERIFY: "false"
+      REDIS_SPOT_EXPIRY: 6m # TTL for spots in Redis cache
+
+    ports:
+      - "8192:8192" # Map container port 8192 to host port 8192
+    volumes:
+      - ./data:/data # Persist SQLite databases and downloaded XML/CSV files (not needed as this data is ephemeral)
+    depends_on:
+      redis:
+        condition: service_healthy # Wait until Redis is healthy, if enabled
+    healthcheck:
+      test: ["CMD", "/app/dxcluster-go-api", "healthcheck"] # Command to run health check
+      interval: 15s # How often to run the check
+      timeout: 5s # How long to wait for the command to return
+      retries: 3 # How many consecutive failures before marking as unhealthy
+      start_period: 30s # Give the app time to start up and become healthy
+    restart: unless-stopped # Always restart unless explicitly stopped
+
+  redis:
+    image: redis:7-alpine # Or valkey/valkey:latest if you prefer Valkey
+    container_name: redis
+    command: redis-server --appendonly yes # Enable persistence
+    volumes:
+      - redis_data:/data # Persist Redis data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"] # Basic Redis health check
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    # No port exposed by default, as dxclustergoapi connects directly via internal Docker network
+    # ports:
+    #   - "6379:6379" # Uncomment if you need to access Redis from outside Docker Compose network
+    restart: unless-stopped
+
+volumes:
+  data: {} # Volume for SQLite DBs and downloaded files
+  redis_data: {} # Volume for Redis persistence

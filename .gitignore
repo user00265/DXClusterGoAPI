@@ -1,13 +1,18 @@
 ### Universal ###
 # Common files that should be ignored in all projects
 
+# Project files
+internal/config/testdata
+testlog.txt
+
 # Logs
 *.log
+
 # Temporary files
 *.tmp
 *~
-
 *.bak
+
 # Environment files (containing secrets, API keys, credentials)
 .env
 *.env
@@ -18,13 +23,11 @@
 
 ### Go ###
 # go specific files
-
 *.exe
 *.test
 vendor/
 *.out
 go.work
-
 go.sum
 
 ### Vscode ###
@@ -35,19 +38,16 @@ go.sum
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
-
 !.vscode/extensions.json
 !.vscode/*.code-snippets
 .history/
 *.vsix
 .ionide
-
 .vs/
 *.code-workspace
 .vscode-test
 .vscodeignore
 .vscode/chrome
-
 .vscode-server/
 .vscode/sftp.json
 .vscode/tags
@@ -72,15 +72,16 @@ go.sum
 .github/env/
 .env.ci
 .env.github-actions
-# GitHub Actions Secrets
 
+# GitHub Actions Secrets
 .github/secrets/
 *.gpg
 *.asc
+
 # GitHub Actions Cache
 .actions-cache/
-
 .github-cache/
+
 # GitHub Actions Artifacts
 artifacts/
 dist/
@@ -90,20 +91,20 @@ build/
 *.log
 action-logs/
 runner-logs/
-# GitHub Actions Local Testing
 
+# GitHub Actions Local Testing
 act.env
 .actrc
 act-secrets.env
+
 # GitHub Actions Scripts
 scripts/
-
 action-scripts/
 *.sh
 *.ps1
+
 # GitHub Actions Runtime
 .runner
-
 .tool-versions
 .github/runners/
 
@@ -115,9 +116,9 @@ node_modules/
 bower_components/
 target/
 dist/
-
 build/
 .cache/
+
 # Log files
 *.log
 logs/
@@ -125,35 +126,35 @@ logs/
 # Git-related files
 .git/
 .gitignore
+
 # Environment files
 .env
-
 .env.*
+
 # Temporary files
 *.tmp
 *.swp
-# IDE-specific files
 
+# IDE-specific files
 .idea/
 .vscode/
+
 # Docker-specific files
 Dockerfile.*
 docker-compose.override.yml
-
 .docker/
 docker-compose.override.yaml
 docker-compose.*.yml
 docker-compose.*.yaml
 *.env.docker
-
 docker-volumes/
 .docker-sync/
 docker/data/
 docker/logs/
 docker-compose.prod.yml
-
 docker-compose.dev.yml
 docker-compose.local.yml
+
 # CI/CD-related files
 .dockerignore
 
@@ -165,25 +166,21 @@ Thumbs.db:encryptable
 ehthumbs.db
 ehthumbs_vista.db
 *.stackdump
-
 [Dd]esktop.ini
 $RECYCLE.BIN/
 *.cab
 *.msi
 *.msix
-
 *.msm
 *.msp
 *.lnk
 *.tmp
 *.bak
-
 System Volume Information/
 [Tt]emp/
 $Recycle.Bin/
 ~$*
 *.log
-
 hiberfil.sys
 pagefile.sys
 *.db
@@ -192,43 +189,37 @@ ntuser.dat*
 
 ### Macos ###
 # macOS operating system specific files
-
 .DS_Store
 .AppleDouble
 .LSOverride
 Icon
 ._*
-
 .DocumentRevisions-V100
 .fseventsd
 .Spotlight-V100
 .TemporaryItems
 .Trashes
-
 .VolumeIcon.icns
 .com.apple.timemachine.donotpresent
 .AppleDB
 .AppleDesktop
 Network Trash Folder
-
 Temporary Items
 .apdisk
 *.icloud
 .AppleDB/
 .AppleDesktop/
-
 *.AppleDouble
 *.AppleDB
 .Spotlight-V100/
 .Trashes/
 *.swp
-
 Network Trash Folder/
 .DS_Store?
 .Spotlight-V100
 .Trashes
 
-### Travis_ci ###
+### Travis CI ###
 # Travis CI configuration and build files
 
 # Travis CI
