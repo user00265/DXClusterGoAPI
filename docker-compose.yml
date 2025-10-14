@@ -48,7 +48,7 @@ services:
       REDIS_DB: 0
       REDIS_USE_TLS: "false"
       REDIS_INSECURE_SKIP_VERIFY: "false"
-      REDIS_SPOT_EXPIRY: 6m # TTL for spots in Redis cache
+      REDIS_SPOT_EXPIRY: 10m # TTL for spots in Redis cache
 
     ports:
       - "8192:8192" # Map container port 8192 to host port 8192
