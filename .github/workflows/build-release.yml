@@ -1,4 +1,4 @@
-name: CI
+name: Release
 
 permissions:
   contents: read
@@ -11,12 +11,9 @@ on:
     tags:
       - 'v*.*.*'
 
-  pull_request:
-    branches:
-      - master
-
 jobs:
-  build-and-test:
+  test-and-build:
+    name: 'Test and Build'
     runs-on: ubuntu-latest
 
     steps:
