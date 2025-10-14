@@ -92,7 +92,7 @@ jobs:
 
     - name: Set up QEMU (multi-arch emulation)
       if: steps.get_version.outputs.PUSH_DOCKER == 'true'
-      uses: docker/setup-qemu-action@v2
+      uses: docker/setup-qemu-action@v3
 
     - name: Login to Docker Hub
       if: steps.get_version.outputs.PUSH_DOCKER == 'true' && github.event_name != 'pull_request'
