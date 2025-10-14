@@ -682,6 +682,11 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 	} else {
 		logging.Info("[%s] DXCC data update completed. Reloading in-memory maps.", time.Now().Format(time.RFC3339))
 
+		// Force a WAL checkpoint to ensure data is flushed to disk immediately
+		if _, err := c.dbClient.GetDB().ExecContext(ctx, "PRAGMA wal_checkpoint(FULL);"); err != nil {
+			logging.Warn("[%s] Failed to checkpoint WAL after DXCC update: %v", time.Now().Format(time.RFC3339), err)
+		}
+
 		// Record the successful download
 		if err := c.updateLastDownloadTime(ctx, sourceURL, len(data)); err != nil {
 			logging.Warn("[%s] Failed to update DXCC download metadata: %v", time.Now().Format(time.RFC3339), err)

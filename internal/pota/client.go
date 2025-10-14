@@ -387,9 +387,17 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 			spotTime = spotTime.UTC()
 		}
 
+		// Validate required fields before creating spot
+		spotter := strings.TrimSpace(item.Spotter)
+		activator := strings.TrimSpace(item.Activator)
+		if spotter == "" || activator == "" {
+			logging.Warn("POTA spot rejected: missing spotter=%q or activator=%q ref=%s freq=%.1f", spotter, activator, item.Reference, freq)
+			continue // Skip this spot
+		}
+
 		potaSpot := Spot{
-			Spotter:   item.Spotter,
-			Spotted:   item.Activator,
+			Spotter:   spotter,
+			Spotted:   activator,
 			Frequency: freqMHz,
 			// Build message without extra parentheses to match tests' expected canonicalization
 			Message: fmt.Sprintf("%s%sPOTA @ %s %s %s", item.Mode, func() string {

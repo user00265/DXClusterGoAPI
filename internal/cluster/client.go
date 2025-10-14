@@ -18,6 +18,7 @@ import (
 
 	"github.com/user00265/dxclustergoapi/internal/config"
 	"github.com/user00265/dxclustergoapi/internal/logging"
+	"github.com/user00265/dxclustergoapi/internal/spot"
 )
 
 const (
@@ -85,8 +86,8 @@ func NewClient(cfg config.ClusterConfig) (*Client, error) {
 	if cfg.LoginPrompt == "" {
 		cfg.LoginPrompt = defaultLoginPrompt
 	}
-	if cfg.ClusterName == "" {
-		cfg.ClusterName = "DXCluster" // Default name
+	if cfg.Host == "" {
+		return nil, fmt.Errorf("host must be specified for DX cluster")
 	}
 
 	// Regex breakdown (groups kept to match existing code indexes):
@@ -390,10 +391,6 @@ func (c *Client) readLoop(ctx context.Context) {
 	reader := bufio.NewReader(c.conn)
 
 	awaitingLogin := true
-	awaitingPassword := false
-	if c.cfg.Password != "" {
-		awaitingPassword = true
-	}
 
 	for {
 		// Respect cancellation quickly by checking context before attempting a read.
@@ -451,15 +448,6 @@ func (c *Client) readLoop(ctx context.Context) {
 			awaitingLogin = false
 			continue
 		}
-		if awaitingPassword && strings.Contains(line, defaultPassPrompt) { // Node.js used 'password:' for generic prompt
-			if err := c.write(ctx, c.cfg.Password); err != nil {
-				c.safeSendError(fmt.Errorf("error sending password to %s: %w", c.cfg.Host, err))
-				return // Exit readLoop, trigger reconnection
-			}
-			logging.Debug("[%s] Sent password to %s.", time.Now().Format(time.RFC3339), net.JoinHostPort(c.cfg.Host, c.cfg.Port))
-			awaitingPassword = false
-			continue
-		}
 
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || trimmed == "Logged in." {
@@ -491,7 +479,7 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 		m := c.dxDelimRegex.FindStringSubmatch(dxString)
 		logging.Debug("DX cluster regex matched %d groups", len(m))
 		if len(m) < 5 { // Expecting at least up to the spotted call
-			c.safeSendError(fmt.Errorf("failed to parse DX string '%s' from %s", dxString, c.cfg.ClusterName))
+			c.safeSendError(fmt.Errorf("failed to parse DX string '%s' from %s", dxString, c.cfg.Host))
 			c.safeSendMessage(dxString)
 			logging.Warn("DX cluster failed to parse DX line, emitting as generic message: %q", dxString)
 			return
@@ -515,8 +503,20 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 
 		frequency, err := ParseFrequency(freqStr)
 		if err != nil {
-			c.safeSendError(fmt.Errorf("failed to parse frequency '%s' from DX string '%s' from %s: %w", freqStr, dxString, c.cfg.ClusterName, err))
+			c.safeSendError(fmt.Errorf("failed to parse frequency '%s' from DX string '%s' from %s: %w", freqStr, dxString, c.cfg.Host, err))
 			c.safeSendMessage(dxString)
+			return
+		}
+
+		// Validate required fields before creating spot
+		spotter = strings.TrimSpace(spotter)
+		spotted = strings.TrimSpace(spotted)
+		if spotter == "" {
+			logging.Warn("DX cluster spot rejected: missing spotter callsign. line=%q source=%s", dxString, c.cfg.Host)
+			return
+		}
+		if spotted == "" {
+			logging.Warn("DX cluster spot rejected: missing spotted callsign. line=%q source=%s", dxString, c.cfg.Host)
 			return
 		}
 
@@ -526,10 +526,15 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 			Frequency: frequency, // Frequency in kHz from cluster (matching original format)
 			Message:   strings.TrimSpace(message),
 			When:      time.Now().UTC(), // Use current UTC for spot reception time
-			Source:    c.cfg.ClusterName,
+			Source:    c.cfg.Host,
 		}
+
+		// Detect band from frequency for logging
+		band := spot.BandFromName(frequency)
+
 		c.safeSendSpot(sp)
-		logging.Info("DX cluster emitted spot: spotted=%s spotter=%s freq=%f msg=%q source=%s", sp.Spotted, sp.Spotter, sp.Frequency, sp.Message, sp.Source)
+		logging.Info("DX cluster emitted spot: spotted=%s spotter=%s freq=%.3f band=%s timestamp=%s msg=%q source=%s",
+			sp.Spotted, sp.Spotter, sp.Frequency, band, sp.When.Format(time.RFC3339), sp.Message, sp.Source)
 
 		// Start initial heartbeat test after first spot
 		c.statusMutex.Lock()
@@ -565,7 +570,7 @@ func (c *Client) safeSendError(err error) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Warn("Recovered from panic sending error to closed ErrorChan for %s: %v", c.cfg.ClusterName, r)
+			logging.Warn("Recovered from panic sending error to closed ErrorChan for %s: %v", c.cfg.Host, r)
 		}
 	}()
 	select {
@@ -577,7 +582,7 @@ func (c *Client) safeSendError(err error) {
 func (c *Client) safeSendMessage(msg string) {
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Warn("Recovered from panic sending message to closed MessageChan for %s: %v", c.cfg.ClusterName, r)
+			logging.Warn("Recovered from panic sending message to closed MessageChan for %s: %v", c.cfg.Host, r)
 		}
 	}()
 	select {
@@ -590,7 +595,7 @@ func (c *Client) safeSendSpot(sp Spot) {
 	logging.Debug("DX cluster sending spot: %s -> %s @ %.1f kHz", sp.Spotter, sp.Spotted, sp.Frequency)
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Warn("Recovered from panic sending spot to closed SpotChan for %s: %v", c.cfg.ClusterName, r)
+			logging.Warn("Recovered from panic sending spot to closed SpotChan for %s: %v", c.cfg.Host, r)
 		}
 	}()
 	select {

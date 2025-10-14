@@ -51,10 +51,16 @@ func BandFromName(frequency float64) string {
 	}
 
 	switch {
+	case frequencyMHz >= 0.1357 && frequencyMHz <= 0.1378:
+		return "2200m"
+	case frequencyMHz >= 0.472 && frequencyMHz <= 0.479:
+		return "630m"
 	case frequencyMHz >= 1.8 && frequencyMHz <= 2.0:
 		return "160m"
 	case frequencyMHz >= 3.5 && frequencyMHz <= 4.0:
 		return "80m"
+	case frequencyMHz >= 5.0 && frequencyMHz <= 5.45:
+		return "60m"
 	case frequencyMHz >= 7.0 && frequencyMHz <= 7.3:
 		return "40m"
 	case frequencyMHz >= 10.1 && frequencyMHz <= 10.15:
@@ -71,6 +77,8 @@ func BandFromName(frequency float64) string {
 		return "10m"
 	case frequencyMHz >= 50.0 && frequencyMHz <= 54.0:
 		return "6m"
+	case frequencyMHz >= 70.0 && frequencyMHz <= 71.0:
+		return "4m"
 	case frequencyMHz >= 144.0 && frequencyMHz <= 148.0:
 		return "2m"
 	case frequencyMHz >= 220.0 && frequencyMHz <= 225.0:

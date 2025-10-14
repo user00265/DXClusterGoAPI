@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -142,13 +141,13 @@ func RunApplication(ctx context.Context, args []string) int {
 	logging.Info("Configuration loaded. WebPort: %d, MaxCache: %d, DataDir: %s", cfg.WebPort, cfg.MaxCache, cfg.DataDir)
 
 	// Debug configuration details
-	logging.Debug("DX Config Debug: DXCHost='%s', DXCPort='%s', DXCCallsign='%s', DXCPassword='%s'", cfg.DXCHost, cfg.DXCPort, cfg.DXCCallsign, cfg.DXCPassword)
 	logging.Debug("CLUSTERS JSON: '%s'", cfg.RawClustersJSON)
+	logging.Debug("Global Callsign: '%s'", cfg.Callsign)
 
 	if len(cfg.Clusters) > 0 {
 		logging.Info("DX Clusters configured: %d", len(cfg.Clusters))
 		for i, cluster := range cfg.Clusters {
-			logging.Info("  Cluster %d: %s (%s:%s) callsign=%s", i+1, cluster.ClusterName, cluster.Host, cluster.Port, cluster.Callsign)
+			logging.Info("  Cluster %d: %s:%s callsign=%s", i+1, cluster.Host, cluster.Port, cluster.Callsign)
 		}
 	} else {
 		logging.Warn("No DX Clusters configured.")
@@ -198,15 +197,33 @@ func RunApplication(ctx context.Context, args []string) int {
 	if err != nil {
 		log.Fatalf("FATAL: Failed to initialize LoTW client: %v\n", err)
 	}
-	lotwClient.StartUpdater(ctx) // Start periodic updates
-	logging.Info("LoTW client initialized.")
+
+	// Perform initial synchronous LoTW data check and download BEFORE starting spot sources
+	logging.Info("Checking LoTW data status...")
+	lastLoTWUpdate, err := lotwClient.GetLastDownloadTime(ctx)
+	if err != nil {
+		logging.Warn("Failed to check LoTW last update time: %v", err)
+	}
+	needsLoTWUpdate := lastLoTWUpdate.IsZero() || time.Since(lastLoTWUpdate) >= cfg.LoTWUpdateInterval
+	if needsLoTWUpdate {
+		logging.Info("LoTW data needs update, downloading now (this may take a moment)...")
+		if err := lotwClient.FetchAndStoreUsers(ctx); err != nil {
+			logging.Error("Initial LoTW data fetch failed: %v", err)
+			log.Fatalf("FATAL: Cannot start without LoTW data\n")
+		}
+		logging.Info("LoTW data downloaded and loaded successfully.")
+	} else {
+		logging.Info("LoTW data is up to date (last updated: %s)", lastLoTWUpdate.Format(time.RFC3339))
+	}
+
+	// Now start background periodic updater
+	lotwClient.StartUpdater(ctx)
+	logging.Info("LoTW client ready. Background updater started for periodic checks.")
 	defer func() {
 		logging.Info("Deferred: stopping LoTW updater...")
 		lotwClient.StopUpdater()
 		logging.Info("Deferred: LoTW updater stopped.")
-	}()
-
-	// --- 4. Initialize DXCC Client ---
+	}() // --- 4. Initialize DXCC Client ---
 	dxccDBClient, err := db.NewSQLiteClient(cfg.DataDir, dxcc.DBFileName)
 	if err != nil {
 		log.Fatalf("FATAL: Failed to initialize DXCC DB client: %v\n", err)
@@ -217,15 +234,48 @@ func RunApplication(ctx context.Context, args []string) int {
 	if err != nil {
 		log.Fatalf("FATAL: Failed to initialize DXCC client: %v\n", err)
 	}
-	dxccClient.StartUpdater(ctx) // Start periodic updates
-	logging.Info("DXCC client initialized.")
+
+	// Perform initial synchronous DXCC data check and download BEFORE starting spot sources
+	logging.Info("Checking DXCC data status...")
+	lastDXCCUpdate, err := dxccClient.GetLastDownloadTime(ctx)
+	if err != nil {
+		logging.Warn("Failed to check DXCC last update time: %v", err)
+	}
+	needsDXCCUpdate := lastDXCCUpdate.IsZero() || time.Since(lastDXCCUpdate) >= cfg.DXCCUpdateInterval
+	if needsDXCCUpdate {
+		logging.Info("DXCC data needs update, downloading now (this may take a moment)...")
+		dxccClient.FetchAndStoreData(ctx)
+		logging.Info("DXCC data downloaded and loaded successfully.")
+	} else {
+		logging.Info("DXCC data is up to date (last updated: %s)", lastDXCCUpdate.Format(time.RFC3339))
+		// Load in-memory maps from database NOW to ensure they're ready before spots arrive
+		if err := dxccClient.LoadMapsFromDB(ctx); err != nil {
+			log.Fatalf("FATAL: Failed to load DXCC maps from database: %v\n", err)
+		}
+		// Verify maps are actually populated (database might be empty despite recent update timestamp)
+		if len(dxccClient.PrefixesMap) == 0 {
+			logging.Warn("DXCC database is empty despite recent update timestamp. Forcing download now...")
+			dxccClient.FetchAndStoreData(ctx)
+			logging.Info("DXCC data downloaded and loaded successfully after empty database detection.")
+		}
+	}
+
+	// Now start background periodic updater
+	dxccClient.StartUpdater(ctx)
+	logging.Info("DXCC client ready. Background updater started for periodic checks.")
 	defer func() {
 		logging.Info("Deferred: closing DXCC client (stopping updater)...")
 		dxccClient.Close()
 		logging.Info("Deferred: DXCC client closed.")
 	}()
 
-	// --- 5. Initialize POTA Client (if enabled) ---
+	// ═══════════════════════════════════════════════════════════════════════════
+	// CRITICAL BARRIER: DXCC and LoTW data are now FULLY LOADED and ready.
+	// ═══════════════════════════════════════════════════════════════════════════
+	// Spots can now be enriched immediately upon arrival from any source.
+	logging.Info("DXCC and LoTW data loaded. Ready to initialize spot sources and HTTP API.")
+
+	// --- 6. Initialize POTA Client (if enabled) ---
 	var potaClient *pota.Client
 	if cfg.EnablePOTA {
 		potaClient, err = pota.NewClient(ctx, *cfg, rdb)
@@ -244,9 +294,9 @@ func RunApplication(ctx context.Context, args []string) int {
 		}()
 	}
 
-	// --- 6. Initialize DX Cluster Clients ---
+	//  --- 6. Initialize DX Cluster Clients (but don't connect yet) ---
 	dxClusterClients := make([]*cluster.Client, 0, len(cfg.Clusters))
-	dxClusterNames := make([]string, 0, len(cfg.Clusters))
+	dxClusterHosts := make([]string, 0, len(cfg.Clusters))
 	for _, cc := range cfg.Clusters {
 		client, err := cluster.NewClient(cc)
 		if err != nil {
@@ -254,43 +304,87 @@ func RunApplication(ctx context.Context, args []string) int {
 			continue
 		}
 		dxClusterClients = append(dxClusterClients, client)
-		dxClusterNames = append(dxClusterNames, cc.ClusterName)
-		client.Connect(ctx) // Start connection and reconnection loop
-		// Log a concise one-line message showing the configured channel buffer
+		dxClusterHosts = append(dxClusterHosts, cc.Host)
+		// DON'T call Connect() yet - we'll do that after HTTP API is ready
 		buf := cap(client.SpotChan)
-		logging.Info("DX Cluster client for %s (%s:%s) initialized and connecting. channel_buffer=%d", cc.ClusterName, cc.Host, cc.Port, buf)
+		logging.Info("DX Cluster client for %s:%s created. channel_buffer=%d", cc.Host, cc.Port, buf)
 	}
 	if len(dxClusterClients) == 0 && !cfg.EnablePOTA {
 		logging.Error("No active DX Cluster connections and POTA is disabled. Exiting as there are no spot sources.")
 		return 2
 	}
 
-	// --- 7. Spot Aggregation & Enrichment ---
+	// --- 7. Create Spot Cache and Set up HTTP API BEFORE connecting spot sources ---
 	centralSpotCache := newSpotCache(cfg.MaxCache)
+
+	router := gin.Default()
+	router.SetTrustedProxies(nil) // To prevent "x-forwarded-for" issues if not behind a proxy
+
+	// Middleware to handle BaseURL prefix if configured
+	if cfg.BaseURL != "/" && cfg.BaseURL != "" {
+		router.Group(cfg.BaseURL).Use(func(c *gin.Context) {
+			// Trim base URL from request path for internal routing
+			c.Request.URL.Path = strings.TrimPrefix(c.Request.URL.Path, cfg.BaseURL)
+			c.Next()
+		}).GET("/healthz", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+		apiGroup := router.Group(cfg.BaseURL)
+		setupAPIRoutes(apiGroup, centralSpotCache, dxccClient, lotwClient)
+	} else {
+		router.GET("/healthz", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+		setupAPIRoutes(router.Group("/"), centralSpotCache, dxccClient, lotwClient)
+	}
+
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.WebPort),
+		Handler: router,
+	}
+
+	// Start HTTP server in goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("FATAL: HTTP server failed: %v\n", err)
+		}
+	}()
+	logging.Info("HTTP API listening on :%d (BaseURL: %s)", cfg.WebPort, cfg.BaseURL)
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// NOW connect DX clusters and start POTA polling - everything is ready!
+	// ═══════════════════════════════════════════════════════════════════════════
+
+	for i, client := range dxClusterClients {
+		client.Connect(ctx) // Start connection and reconnection loop
+		logging.Info("DX Cluster client %s:%s connecting...", dxClusterHosts[i], cfg.Clusters[i].Port)
+	}
+
+	// --- 8. Spot Aggregation & Enrichment ---
 	spotChannels := make([]<-chan spot.Spot, 0) // Collect all spot output channels
 
 	// Add DX Cluster spot channels (convert cluster.Spot -> unified spot.Spot)
 	for i, client := range dxClusterClients {
-		clusterName := dxClusterNames[i]
+		clusterHost := dxClusterHosts[i]
 		// Buffer the forwarder channel so brief startup ordering doesn't drop
 		// spots that are emitted before the merge goroutines are scheduled.
 		ch := make(chan spot.Spot, 8)
 		// Forwarder goroutine: convert cluster.Spot to spot.Spot and send on ch
-		go func(c *cluster.Client, out chan<- spot.Spot, clusterName string) {
+		go func(c *cluster.Client, out chan<- spot.Spot, clusterHost string) {
 			defer close(out)
 			forwardedCount := 0
 			for {
 				select {
 				case <-ctx.Done():
-					logging.Info("Cluster forwarder [%s] shutting down. Forwarded %d spots.", clusterName, forwardedCount)
+					logging.Info("Cluster forwarder [%s] shutting down. Forwarded %d spots.", clusterHost, forwardedCount)
 					return
 				case s, ok := <-c.SpotChan:
 					if !ok {
-						logging.Info("Cluster forwarder [%s] spot channel closed. Forwarded %d spots.", clusterName, forwardedCount)
+						logging.Info("Cluster forwarder [%s] spot channel closed. Forwarded %d spots.", clusterHost, forwardedCount)
 						return
 					}
 					forwardedCount++
-					logging.Info("CLUSTER [%s] RAW SPOT #%d: %s -> %s @ %.3f kHz - %s", clusterName, forwardedCount, s.Spotter, s.Spotted, s.Frequency, s.Message)
+					logging.Info("CLUSTER [%s] RAW SPOT #%d: %s -> %s @ %.3f kHz - %s", clusterHost, forwardedCount, s.Spotter, s.Spotted, s.Frequency, s.Message)
 
 					// Send into the buffered forwarder channel. If the application is
 					// shutting down, exit promptly via ctx.Done.
@@ -303,13 +397,13 @@ func RunApplication(ctx context.Context, args []string) int {
 						When:      s.When,
 						Source:    s.Source,
 					}:
-						logging.Info("CLUSTER [%s] FORWARDED SPOT #%d to aggregator", clusterName, forwardedCount)
+						logging.Info("CLUSTER [%s] FORWARDED SPOT #%d to aggregator", clusterHost, forwardedCount)
 					case <-ctx.Done():
 						return
 					}
 				}
 			}
-		}(client, ch, clusterName)
+		}(client, ch, clusterHost)
 
 		spotChannels = append(spotChannels, ch)
 
@@ -376,6 +470,15 @@ func RunApplication(ctx context.Context, args []string) int {
 		// Verbose tracing for spot pipeline; enabled by setting DX_API_VERBOSE_SPOT_PIPELINE=1
 		verbose := os.Getenv("DX_API_VERBOSE_SPOT_PIPELINE") == "1" || strings.ToLower(os.Getenv("DX_API_VERBOSE_SPOT_PIPELINE")) == "true"
 		spotCount := 0
+
+		// Duplicate detection: track spotter+spotted pairs with timestamp
+		type spotKey struct {
+			spotter string
+			spotted string
+		}
+		recentSpots := make(map[spotKey]time.Time)
+		const dedupeWindow = 30 * time.Second
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -386,6 +489,43 @@ func RunApplication(ctx context.Context, args []string) int {
 					logging.Info("Spot aggregation: merged channel closed, exiting goroutine. Total spots processed: %d", spotCount)
 					return
 				}
+
+				// Validate required fields - reject spots with missing callsigns
+				if strings.TrimSpace(receivedSpot.Spotter) == "" {
+					logging.Warn("SPOT REJECTED: missing spotter callsign. spotted=%q freq=%.3f source=%s", receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Source)
+					continue
+				}
+				if strings.TrimSpace(receivedSpot.Spotted) == "" {
+					logging.Warn("SPOT REJECTED: missing spotted callsign. spotter=%q freq=%.3f source=%s", receivedSpot.Spotter, receivedSpot.Frequency, receivedSpot.Source)
+					continue
+				}
+
+				// Check for duplicate spot (same spotter+spotted within 30 seconds)
+				key := spotKey{
+					spotter: receivedSpot.Spotter,
+					spotted: receivedSpot.Spotted,
+				}
+				now := time.Now()
+
+				// Clean up old entries from the map (older than 30 seconds)
+				for k, t := range recentSpots {
+					if now.Sub(t) > dedupeWindow {
+						delete(recentSpots, k)
+					}
+				}
+
+				// Check if this is a duplicate
+				if lastSeen, exists := recentSpots[key]; exists {
+					if now.Sub(lastSeen) < dedupeWindow {
+						logging.Debug("DUPLICATE SPOT FILTERED: %s -> %s @ %.3f kHz [%s] (seen %.1f seconds ago)",
+							receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Source, now.Sub(lastSeen).Seconds())
+						continue
+					}
+				}
+
+				// Record this spot
+				recentSpots[key] = now
+
 				spotCount++
 				logging.Info("SPOT #%d RECEIVED: %s -> %s @ %.3f kHz [%s] - %s", spotCount, receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Source, receivedSpot.Message)
 				if verbose {
@@ -404,7 +544,7 @@ func RunApplication(ctx context.Context, args []string) int {
 					continue
 				}
 				centralSpotCache.AddSpot(enrichedSpot)
-				logging.Info("SPOT #%d CACHED (enriched): %s -> %s @ %.3f kHz [%s] Band=%s", spotCount, enrichedSpot.Spotter, enrichedSpot.Spotted, enrichedSpot.Frequency, enrichedSpot.Source, enrichedSpot.Band)
+				logging.Info("SPOT #%d CACHED (enriched): %s -> %s @ %.3fMHz (%s) [%s]", spotCount, enrichedSpot.Spotter, enrichedSpot.Spotted, enrichedSpot.Frequency, enrichedSpot.Band, enrichedSpot.Source)
 				if verbose {
 					logging.Debug("Aggregator added enriched spot from %s (spotter=%s)", enrichedSpot.Source, enrichedSpot.Spotter)
 				}
@@ -420,50 +560,6 @@ func RunApplication(ctx context.Context, args []string) int {
 		potaClient.StartPolling(ctx)
 		logging.Info("POTA polling started (deferred).")
 	}
-
-	// --- 8. Set up HTTP API (Gin) ---
-	router := gin.Default()
-	router.SetTrustedProxies(nil) // To prevent "x-forwarded-for" issues if not behind a proxy
-
-	// Middleware to handle BaseURL prefix if configured
-	if cfg.BaseURL != "/" && cfg.BaseURL != "" {
-		router.Group(cfg.BaseURL).Use(func(c *gin.Context) {
-			// Trim base URL from request path for internal routing
-			c.Request.URL.Path = strings.TrimPrefix(c.Request.URL.Path, cfg.BaseURL)
-			c.Next()
-		}).GET("/healthz", func(c *gin.Context) {
-			c.Status(http.StatusOK)
-		})
-		apiGroup := router.Group(cfg.BaseURL)
-		setupAPIRoutes(apiGroup, centralSpotCache, dxccClient, lotwClient)
-	} else {
-		router.GET("/healthz", func(c *gin.Context) {
-			c.Status(http.StatusOK)
-		})
-		setupAPIRoutes(router.Group("/"), centralSpotCache, dxccClient, lotwClient)
-	}
-
-	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.WebPort),
-		Handler: router,
-	}
-
-	// Try to listen synchronously so we can fail fast on bind errors. Tests expect
-	// RunApplication to return quickly on failure rather than hang while other
-	// goroutines continue running.
-	addr := fmt.Sprintf(":%d", cfg.WebPort)
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Printf("FATAL: HTTP server failed to listen on %s: %v", addr, err)
-		return 3
-	}
-	logging.Info("HTTP API listening on %s (BaseURL: %s)", addr, cfg.BaseURL)
-	// Serve with the acquired listener in a goroutine. Serve will return when Shutdown is called.
-	go func() {
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			logging.Error("HTTP server exited with error: %v", err)
-		}
-	}()
 
 	// --- 9. Graceful Shutdown ---
 	quit := make(chan os.Signal, 1)
@@ -494,8 +590,8 @@ func RunApplication(ctx context.Context, args []string) int {
 	// a stuck client Close() won't hang the entire shutdown process.
 	for i, c := range dxClusterClients {
 		name := "<unknown>"
-		if i < len(dxClusterNames) {
-			name = dxClusterNames[i]
+		if i < len(dxClusterHosts) {
+			name = dxClusterHosts[i]
 		}
 		logging.Info("Closing DX Cluster client %s...", name)
 		done := make(chan struct{})

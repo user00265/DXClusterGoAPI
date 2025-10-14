@@ -38,16 +38,12 @@ var (
 
 // ClusterConfig holds connection details for a single DX cluster.
 type ClusterConfig struct {
-	Host        string `json:"host"`
-	Port        string `json:"port"`
-	Callsign    string `json:"call"`
-	Password    string `json:"password"`
-	LoginPrompt string `json:"loginPrompt"`
-	// Name of the cluster, used as the spot source (e.g., "DXCluster", "SOTA")
-	ClusterName string `json:"cluster"`
-	// ChannelBuffer controls the size of the internal channels used by the cluster client.
-	// If zero, a sensible default will be used by the client.
-	ChannelBuffer int `json:"channelBuffer"`
+	Host          string `json:"host"`          // Required: hostname or IP
+	Port          string `json:"port"`          // Required: port number
+	Callsign      string `json:"call"`          // Optional: callsign (uses global CALLSIGN if not set)
+	LoginPrompt   string `json:"loginPrompt"`   // Optional: login prompt to expect (default "login:")
+	SOTA          bool   `json:"sota"`          // Optional: is this a SOTA cluster? (default false)
+	ChannelBuffer int    `json:"channelBuffer"` // Optional: channel buffer size (default 8)
 }
 
 // RedisConfig holds configuration for the optional Redis cache.
@@ -71,16 +67,13 @@ type Config struct {
 	DataDir  string `env:"DATA_DIR" envDefault:"/data"` // Directory for SQLite files
 
 	// DX Cluster(s) Configuration
-	// CLUSTERS env var, if present, overrides individual DXHOST, DXPORT, etc.
-	// Example: CLUSTERS='[{"host":"dxfun.com","port":"8000","call":"MYCALL","loginPrompt":"login:","cluster":"DXCluster"},{"host":"cluster.sota.org.uk","port":"7300","call":"MYCALL","loginPrompt":"login:","cluster":"SOTACluster"}]'
+	// CLUSTERS env var contains JSON array of cluster configs
+	// Example: CLUSTERS='[{"host":"dx.n9jr.com","port":"7300","call":"MYCALL"},{"host":"cluster.sota.org.uk","port":"7300","sota":true}]'
 	RawClustersJSON string          `env:"CLUSTERS"`
-	Clusters        []ClusterConfig `env:"-"` // Will be populated from RawClustersJSON or individual vars
+	Clusters        []ClusterConfig `env:"-"` // Will be populated from RawClustersJSON
 
-	// Individual DX Cluster (legacy/simple config, overridden by CLUSTERS JSON)
-	DXCHost     string `env:"DXHOST" envDefault:"127.0.0.1"`
-	DXCPort     string `env:"DXPORT" envDefault:"7300"`
-	DXCCallsign string `env:"DXCALL"`
-	DXCPassword string `env:"DXPASSWORD"`
+	// Global CALLSIGN - used for all clusters that don't specify their own
+	Callsign string `env:"CALLSIGN"`
 
 	// POTA Integration
 	EnablePOTA       bool          `env:"POTA_INTEGRATION" envDefault:"false"`
@@ -116,25 +109,27 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// --- DX Cluster Configuration Logic ---
-	// If CLUSTERS JSON is provided, use that. Otherwise, use individual DXC_ vars.
+	// Only use CLUSTERS JSON - no more legacy support
 	if cfg.RawClustersJSON != "" {
+		// Use CLUSTERS JSON if provided
 		if err := json.Unmarshal([]byte(cfg.RawClustersJSON), &cfg.Clusters); err != nil {
 			return nil, fmt.Errorf("failed to parse CLUSTERS JSON: %w", err)
 		}
-	} else {
-		// Fallback to individual DXHOST/DXPORT/DXCALL/DXPASSWORD
-		// Only add if CallSign is present, otherwise it's likely an incomplete config.
-		if cfg.DXCCallsign != "" {
-			cfg.Clusters = []ClusterConfig{
-				{
-					Host:        cfg.DXCHost,
-					Port:        cfg.DXCPort,
-					Callsign:    cfg.DXCCallsign,
-					Password:    cfg.DXCPassword,
-					LoginPrompt: "login:", // Default as seen in Node.js
-					ClusterName: "DXCluster",
-				},
-			}
+	}
+
+	// Apply global callsign to clusters that don't have one
+	globalCallsign := cfg.Callsign
+	for i := range cfg.Clusters {
+		if cfg.Clusters[i].Callsign == "" {
+			cfg.Clusters[i].Callsign = globalCallsign
+		}
+		// Set default login prompt if not specified
+		if cfg.Clusters[i].LoginPrompt == "" {
+			cfg.Clusters[i].LoginPrompt = "login:"
+		}
+		// Set default channel buffer if not specified
+		if cfg.Clusters[i].ChannelBuffer <= 0 {
+			cfg.Clusters[i].ChannelBuffer = cfg.DXCChannelBuffer
 		}
 	}
 
