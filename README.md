@@ -1,6 +1,7 @@
 # DXClusterGoAPI
 
-[![CI Status](https://github.com/user00265/dxclustergoapi/actions/workflows/ci.yml/badge.svg)](https://github.com/user00265/dxclustergoapi/actions/workflows/ci.yml)
+[![Release Build Status](https://github.com/user00265/dxclustergoapi/actions/workflows/build-release.yml/badge.svg)](https://github.com/user00265/dxclustergoapi/actions/workflows/build-release.yml)
+[![Develop Build Status](https://github.com/user00265/dxclustergoapi/actions/workflows/build-develop.yml/badge.svg)](https://github.com/user00265/dxclustergoapi/actions/workflows/build-develop.yml)
 [![Docker Image](https://img.shields.io/docker/pulls/user00265/dxclustergoapi?label=Docker%20Pulls)](https://hub.docker.com/r/user00265/dxclustergoapi)
 [![Go Report Card](https://goreportcard.com/badge/github.com/user00265/dxclustergoapi)](https://goreportcard.com/report/github.com/user00265/dxclustergoapi)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
