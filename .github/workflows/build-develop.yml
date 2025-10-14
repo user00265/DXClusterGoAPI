@@ -1,0 +1,144 @@
+name: Develop
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+
+  pull_request:
+    branches:
+      - master
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+
+jobs:
+  test-and-build:
+    name: 'Test and Build'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Get Project Version for User-Agent and Docker Tags
+      id: get_version
+      run: |
+        TAG_NAME=${GITHUB_REF_NAME}
+        COMMIT_SHA=${GITHUB_SHA}
+        
+        # Initialize variables
+        BUILD_VERSION="unknown"
+        GIT_COMMIT=$COMMIT_SHA
+        IS_SEMVER_TAG="false"
+        PUSH_DOCKER="false" # Flag to control if Docker images should be pushed at all
+        
+        # Logic for determining BUILD_VERSION and PUSH_DOCKER
+        if [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
+          BUILD_VERSION="testing"
+          PUSH_DOCKER="true"
+        elif [[ "${GITHUB_REF}" == refs/tags/v* && "${TAG_NAME}" =~ ^v([0-9]+\.){2}[0-9]+$ ]]; then
+          BUILD_VERSION=$TAG_NAME
+          IS_SEMVER_TAG="true"
+          PUSH_DOCKER="true"
+        fi
+        
+        # Export as both env vars and step outputs for later steps
+        echo "BUILD_VERSION=$BUILD_VERSION" >> $GITHUB_ENV
+        echo "GIT_COMMIT=$GIT_COMMIT" >> $GITHUB_ENV
+        echo "IS_SEMVER_TAG=$IS_SEMVER_TAG" >> $GITHUB_ENV
+        echo "PUSH_DOCKER=$PUSH_DOCKER" >> $GITHUB_ENV
+        echo "BUILD_VERSION=$BUILD_VERSION" >> $GITHUB_OUTPUT
+        echo "GIT_COMMIT=$GIT_COMMIT" >> $GITHUB_OUTPUT
+        echo "IS_SEMVER_TAG=$IS_SEMVER_TAG" >> $GITHUB_OUTPUT
+        echo "PUSH_DOCKER=$PUSH_DOCKER" >> $GITHUB_OUTPUT
+        echo "User-Agent Build Version: $BUILD_VERSION ($GIT_COMMIT)"
+
+    - name: Build application (dry run)
+      run: |
+        go build -v \
+        -ldflags "-X 'github.com/user00265/dxclustergoapi/internal/version.BuildVersion=${{ steps.get_version.outputs.BUILD_VERSION }}' \
+                  -X 'github.com/user00265/dxclustergoapi/internal/version.GitCommit=${{ steps.get_version.outputs.GIT_COMMIT }}'" \
+        ./cmd/dxcluster-client
+
+    - name: Run unit tests
+      run: go test -v -short ./...
+
+    - name: Run integration tests
+      run: go test -v -tags=integration ./cmd/dxcluster-client
+
+    # Build and Push Docker images (only if PUSH_DOCKER is true)
+    - name: Set up Docker Buildx
+      if: steps.get_version.outputs.PUSH_DOCKER == 'true'
+      uses: docker/setup-buildx-action@v3
+      with:
+        version: latest
+
+    - name: Set up QEMU (multi-arch emulation)
+      if: steps.get_version.outputs.PUSH_DOCKER == 'true'
+      uses: docker/setup-qemu-action@v2
+
+    - name: Login to Docker Hub
+      if: steps.get_version.outputs.PUSH_DOCKER == 'true' && github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Login to GitHub Container Registry
+      if: steps.get_version.outputs.PUSH_DOCKER == 'true' && github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Prepare Docker Hub tags
+      id: docker_hub_tags
+      if: steps.get_version.outputs.PUSH_DOCKER == 'true'
+      run: |
+        TAGS="user00265/dxclustergoapi:${{ steps.get_version.outputs.BUILD_VERSION }}"
+        if [ "${{ steps.get_version.outputs.IS_SEMVER_TAG }}" == "true" ]; then
+          TAGS="${TAGS},user00265/dxclustergoapi:latest"
+        fi
+        echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+    - name: Prepare GitHub Packages tags
+      id: ghcr_tags
+      if: steps.get_version.outputs.PUSH_DOCKER == 'true'
+      run: |
+        TAGS="ghcr.io/user00265/dxclustergoapi:${{ steps.get_version.outputs.BUILD_VERSION }}"
+        if [ "${{ steps.get_version.outputs.IS_SEMVER_TAG }}" == "true" ]; then
+          TAGS="${TAGS},ghcr.io/user00265/dxclustergoapi:latest"
+        fi
+        echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+    - name: Build and Push Docker images (multi-arch)
+      if: steps.get_version.outputs.PUSH_DOCKER == 'true' && github.event_name != 'pull_request'
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        platforms: linux/amd64,linux/arm64
+        tags: ${{ steps.docker_hub_tags.outputs.tags }},${{ steps.ghcr_tags.outputs.tags }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          BUILD_VERSION=${{ steps.get_version.outputs.BUILD_VERSION }}
+          GIT_COMMIT=${{ steps.get_version.outputs.GIT_COMMIT }}
