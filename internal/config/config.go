@@ -31,6 +31,7 @@ var (
 	ClubLogAPIURL     = "https://cdn.clublog.org/cty.php?api=608df94896cb9c5421ae748235492b43815610c9"
 	FallbackGitHubURL = "https://github.com/wavelog/dxcc_data/raw/refs/heads/master/cty.xml.gz"
 
+	// Default LoTW URL - can be overridden via environment variable
 	LoTWActivityURL = "https://lotw.arrl.org/lotw-user-activity.csv"
 	POTAAPIEndpoint = "https://api.pota.app/spot/activator"
 )
@@ -59,7 +60,7 @@ type RedisConfig struct {
 	DB                 int           `env:"REDIS_DB" envDefault:"0"`
 	UseTLS             bool          `env:"REDIS_USE_TLS" envDefault:"false"`
 	InsecureSkipVerify bool          `env:"REDIS_INSECURE_SKIP_VERIFY" envDefault:"false"`
-	SpotExpiry         time.Duration `env:"REDIS_SPOT_EXPIRY" envDefault:"360s"` // Default 6 minutes
+	SpotExpiry         time.Duration `env:"REDIS_SPOT_EXPIRY" envDefault:"600s"` // Default 10 minutes
 }
 
 // Config holds all application configuration.

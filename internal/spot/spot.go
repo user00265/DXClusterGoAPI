@@ -35,67 +35,73 @@ type Spot struct {
 	} `json:"additional_data,omitempty"`
 }
 
-// BandFromName converts a frequency (in MHz) to a ham radio band string.
+// BandFromName converts a frequency to a ham radio band string.
+// Accepts frequency in Hz, kHz, or MHz and automatically detects the unit.
 // This function mirrors the qrg2band from the Node.js original.
-func BandFromName(frequencyMHz float64) string {
-	frequencyHz := frequencyMHz * 1_000_000 // Convert MHz to Hz
+func BandFromName(frequency float64) string {
+	// Auto-detect units and normalize to MHz for band detection
+	var frequencyMHz float64
+
+	if frequency >= 1000000 { // >= 1MHz, assume Hz
+		frequencyMHz = frequency / 1000000.0
+	} else if frequency >= 1000 { // >= 1kHz, assume kHz
+		frequencyMHz = frequency / 1000.0
+	} else { // < 1kHz, assume already MHz
+		frequencyMHz = frequency
+	}
 
 	switch {
-	case frequencyHz >= 1_000_000 && frequencyHz < 2_000_000:
+	case frequencyMHz >= 1.8 && frequencyMHz <= 2.0:
 		return "160m"
-	case frequencyHz >= 3_000_000 && frequencyHz < 4_000_000:
+	case frequencyMHz >= 3.5 && frequencyMHz <= 4.0:
 		return "80m"
-	case frequencyHz >= 6_000_000 && frequencyHz < 8_000_000:
+	case frequencyMHz >= 7.0 && frequencyMHz <= 7.3:
 		return "40m"
-	case frequencyHz >= 9_000_000 && frequencyHz < 11_000_000:
+	case frequencyMHz >= 10.1 && frequencyMHz <= 10.15:
 		return "30m"
-	case frequencyHz >= 13_000_000 && frequencyHz < 15_000_000:
+	case frequencyMHz >= 14.0 && frequencyMHz <= 14.35:
 		return "20m"
-	case frequencyHz >= 17_000_000 && frequencyHz < 19_000_000:
+	case frequencyMHz >= 18.068 && frequencyMHz <= 18.168:
 		return "17m"
-	case frequencyHz >= 20_000_000 && frequencyHz < 22_000_000:
+	case frequencyMHz >= 21.0 && frequencyMHz <= 21.45:
 		return "15m"
-	case frequencyHz >= 23_000_000 && frequencyHz < 25_000_000:
+	case frequencyMHz >= 24.89 && frequencyMHz <= 24.99:
 		return "12m"
-	case frequencyHz >= 27_000_000 && frequencyHz < 30_000_000:
+	case frequencyMHz >= 28.0 && frequencyMHz <= 29.7:
 		return "10m"
-	case frequencyHz >= 40_660_000 && frequencyHz < 40_690_000:
-		return "8m" // Often for 8m band experimentation
-	case frequencyHz >= 49_000_000 && frequencyHz <= 54_000_000:
+	case frequencyMHz >= 50.0 && frequencyMHz <= 54.0:
 		return "6m"
-	case frequencyHz >= 69_000_000 && frequencyHz < 71_000_000:
-		return "4m"
-	case frequencyHz >= 140_000_000 && frequencyHz < 150_000_000:
+	case frequencyMHz >= 144.0 && frequencyMHz <= 148.0:
 		return "2m"
-	case frequencyHz >= 218_000_000 && frequencyHz < 226_000_000:
+	case frequencyMHz >= 220.0 && frequencyMHz <= 225.0:
 		return "1.25m"
-	case frequencyHz >= 430_000_000 && frequencyHz < 440_000_000:
+	case frequencyMHz >= 430.0 && frequencyMHz <= 450.0:
 		return "70cm"
-	case frequencyHz >= 900_000_000 && frequencyHz < 930_000_000:
+	case frequencyMHz >= 902.0 && frequencyMHz <= 928.0:
 		return "33cm"
-	case frequencyHz >= 1_200_000_000 && frequencyHz < 1_300_000_000:
+	case frequencyMHz >= 1240.0 && frequencyMHz <= 1300.0:
 		return "23cm"
-	case frequencyHz >= 2_200_000_000 && frequencyHz < 2_600_000_000:
+	case frequencyMHz >= 2300.0 && frequencyMHz <= 2450.0:
 		return "13cm"
-	case frequencyHz >= 3_000_000_000 && frequencyHz < 4_000_000_000:
+	case frequencyMHz >= 3300.0 && frequencyMHz <= 3500.0:
 		return "9cm"
-	case frequencyHz >= 5_000_000_000 && frequencyHz < 6_000_000_000:
+	case frequencyMHz >= 5650.0 && frequencyMHz <= 5925.0:
 		return "6cm"
-	case frequencyHz >= 9_000_000_000 && frequencyHz < 11_000_000_000:
+	case frequencyMHz >= 10000.0 && frequencyMHz <= 10500.0:
 		return "3cm"
-	case frequencyHz >= 23_000_000_000 && frequencyHz < 25_000_000_000:
+	case frequencyMHz >= 24000.0 && frequencyMHz <= 24250.0:
 		return "1.2cm"
-	case frequencyHz >= 46_000_000_000 && frequencyHz < 55_000_000_000:
+	case frequencyMHz >= 47000.0 && frequencyMHz <= 47200.0:
 		return "6mm"
-	case frequencyHz >= 75_000_000_000 && frequencyHz < 82_000_000_000:
+	case frequencyMHz >= 75500.0 && frequencyMHz <= 81500.0:
 		return "4mm"
-	case frequencyHz >= 120_000_000_000 && frequencyHz < 125_000_000_000:
+	case frequencyMHz >= 119980.0 && frequencyMHz <= 120020.0:
 		return "2.5mm"
-	case frequencyHz >= 133_000_000_000 && frequencyHz < 150_000_000_000:
+	case frequencyMHz >= 142000.0 && frequencyMHz <= 149000.0:
 		return "2mm"
-	case frequencyHz >= 240_000_000_000 && frequencyHz < 250_000_000_000:
+	case frequencyMHz >= 241000.0 && frequencyMHz <= 250000.0:
 		return "1mm"
-	case frequencyHz >= 250_000_000_000:
+	case frequencyMHz >= 250000.0:
 		return "<1mm"
 	default:
 		return "Unknown"

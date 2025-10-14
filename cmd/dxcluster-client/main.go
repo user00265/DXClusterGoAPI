@@ -140,8 +140,16 @@ func RunApplication(ctx context.Context, args []string) int {
 
 	// LOG_LEVEL was applied earlier so subsequent logs respect the selected level.
 	logging.Info("Configuration loaded. WebPort: %d, MaxCache: %d, DataDir: %s", cfg.WebPort, cfg.MaxCache, cfg.DataDir)
+
+	// Debug configuration details
+	logging.Debug("DX Config Debug: DXCHost='%s', DXCPort='%s', DXCCallsign='%s', DXCPassword='%s'", cfg.DXCHost, cfg.DXCPort, cfg.DXCCallsign, cfg.DXCPassword)
+	logging.Debug("CLUSTERS JSON: '%s'", cfg.RawClustersJSON)
+
 	if len(cfg.Clusters) > 0 {
 		logging.Info("DX Clusters configured: %d", len(cfg.Clusters))
+		for i, cluster := range cfg.Clusters {
+			logging.Info("  Cluster %d: %s (%s:%s) callsign=%s", i+1, cluster.ClusterName, cluster.Host, cluster.Port, cluster.Callsign)
+		}
 	} else {
 		logging.Warn("No DX Clusters configured.")
 	}
@@ -262,21 +270,28 @@ func RunApplication(ctx context.Context, args []string) int {
 	spotChannels := make([]<-chan spot.Spot, 0) // Collect all spot output channels
 
 	// Add DX Cluster spot channels (convert cluster.Spot -> unified spot.Spot)
-	for _, client := range dxClusterClients {
+	for i, client := range dxClusterClients {
+		clusterName := dxClusterNames[i]
 		// Buffer the forwarder channel so brief startup ordering doesn't drop
 		// spots that are emitted before the merge goroutines are scheduled.
 		ch := make(chan spot.Spot, 8)
 		// Forwarder goroutine: convert cluster.Spot to spot.Spot and send on ch
-		go func(c *cluster.Client, out chan<- spot.Spot) {
+		go func(c *cluster.Client, out chan<- spot.Spot, clusterName string) {
 			defer close(out)
+			forwardedCount := 0
 			for {
 				select {
 				case <-ctx.Done():
+					logging.Info("Cluster forwarder [%s] shutting down. Forwarded %d spots.", clusterName, forwardedCount)
 					return
 				case s, ok := <-c.SpotChan:
 					if !ok {
+						logging.Info("Cluster forwarder [%s] spot channel closed. Forwarded %d spots.", clusterName, forwardedCount)
 						return
 					}
+					forwardedCount++
+					logging.Info("CLUSTER [%s] RAW SPOT #%d: %s -> %s @ %.3f kHz - %s", clusterName, forwardedCount, s.Spotter, s.Spotted, s.Frequency, s.Message)
+
 					// Send into the buffered forwarder channel. If the application is
 					// shutting down, exit promptly via ctx.Done.
 					select {
@@ -288,12 +303,13 @@ func RunApplication(ctx context.Context, args []string) int {
 						When:      s.When,
 						Source:    s.Source,
 					}:
+						logging.Info("CLUSTER [%s] FORWARDED SPOT #%d to aggregator", clusterName, forwardedCount)
 					case <-ctx.Done():
 						return
 					}
 				}
 			}
-		}(client, ch)
+		}(client, ch, clusterName)
 
 		spotChannels = append(spotChannels, ch)
 
@@ -302,7 +318,9 @@ func RunApplication(ctx context.Context, args []string) int {
 			for {
 				select {
 				case err := <-c.ErrorChan:
-					logging.Error("from DX Cluster: %v", err)
+					if err != nil {
+						logging.Error("from DX Cluster: %v", err)
+					}
 				case msg := <-c.MessageChan:
 					_ = msg // Ignore generic messages for now
 				case <-ctx.Done():
@@ -357,31 +375,36 @@ func RunApplication(ctx context.Context, args []string) int {
 		merged := mergeSpotChannels(spotChannels...)
 		// Verbose tracing for spot pipeline; enabled by setting DX_API_VERBOSE_SPOT_PIPELINE=1
 		verbose := os.Getenv("DX_API_VERBOSE_SPOT_PIPELINE") == "1" || strings.ToLower(os.Getenv("DX_API_VERBOSE_SPOT_PIPELINE")) == "true"
+		spotCount := 0
 		for {
 			select {
 			case <-ctx.Done():
-				logging.Info("Spot aggregation goroutine shutting down due to context.")
+				logging.Info("Spot aggregation goroutine shutting down due to context. Total spots processed: %d", spotCount)
 				return
 			case receivedSpot, ok := <-merged:
 				if !ok {
-					logging.Info("Spot aggregation: merged channel closed, exiting goroutine.")
+					logging.Info("Spot aggregation: merged channel closed, exiting goroutine. Total spots processed: %d", spotCount)
 					return
 				}
+				spotCount++
+				logging.Info("SPOT #%d RECEIVED: %s -> %s @ %.3f kHz [%s] - %s", spotCount, receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Source, receivedSpot.Message)
 				if verbose {
 					logging.Debug("Aggregator received spot: source=%s spotter=%s spotted=%s freq=%.3f msg=%q when=%s", receivedSpot.Source, receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Message, receivedSpot.When.Format(time.RFC3339))
 				}
 				enrichedSpot, err := enrichSpot(ctx, receivedSpot, dxccClient, lotwClient)
 				if err != nil {
-					logging.Error("Failed to enrich spot from %s (%s->%s @ %.3f MHz): %v", receivedSpot.Source, receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, err)
+					logging.Error("Failed to enrich spot from %s (%s->%s @ %.3f kHz): %v", receivedSpot.Source, receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, err)
 					// Still add the non-enriched spot if enrichment fails, or discard?
 					// For now, add the partially enriched one.
 					centralSpotCache.AddSpot(receivedSpot)
+					logging.Info("SPOT #%d CACHED (non-enriched): %s -> %s @ %.3f kHz [%s]", spotCount, receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Source)
 					if verbose {
 						logging.Debug("Aggregator added non-enriched spot from %s (spotter=%s)", receivedSpot.Source, receivedSpot.Spotter)
 					}
 					continue
 				}
 				centralSpotCache.AddSpot(enrichedSpot)
+				logging.Info("SPOT #%d CACHED (enriched): %s -> %s @ %.3f kHz [%s] Band=%s", spotCount, enrichedSpot.Spotter, enrichedSpot.Spotted, enrichedSpot.Frequency, enrichedSpot.Source, enrichedSpot.Band)
 				if verbose {
 					logging.Debug("Aggregator added enriched spot from %s (spotter=%s)", enrichedSpot.Source, enrichedSpot.Spotter)
 				}
@@ -412,12 +435,12 @@ func RunApplication(ctx context.Context, args []string) int {
 			c.Status(http.StatusOK)
 		})
 		apiGroup := router.Group(cfg.BaseURL)
-		setupAPIRoutes(apiGroup, centralSpotCache, dxccClient)
+		setupAPIRoutes(apiGroup, centralSpotCache, dxccClient, lotwClient)
 	} else {
 		router.GET("/healthz", func(c *gin.Context) {
 			c.Status(http.StatusOK)
 		})
-		setupAPIRoutes(router.Group("/"), centralSpotCache, dxccClient)
+		setupAPIRoutes(router.Group("/"), centralSpotCache, dxccClient, lotwClient)
 	}
 
 	srv := &http.Server{
@@ -530,6 +553,7 @@ func enrichSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwC
 
 	// Add Band information
 	s.Band = spot.BandFromName(s.Frequency)
+	logging.Debug("Band assignment: %.3f kHz -> %s", s.Frequency, s.Band)
 
 	return s, nil
 }
@@ -561,7 +585,7 @@ func mergeSpotChannels(channels ...<-chan spot.Spot) <-chan spot.Spot {
 }
 
 // setupAPIRoutes configures all API endpoints.
-func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Client) {
+func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Client, lotwClient *lotw.Client) {
 	// GET /spots - Retrieve all cached spots.
 	r.GET("/spots", func(c *gin.Context) {
 		spots := cache.GetAllSpots()
@@ -695,6 +719,19 @@ func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Clien
 			"pota":     0,
 			"freshest": nil, // Will be ISO string or null
 			"oldest":   nil, // Will be ISO string or null
+		}
+
+		// Add DXCC and LoTW last update times
+		if dxccLastUpdate, err := dxccClient.GetLastDownloadTime(context.Background()); err == nil && !dxccLastUpdate.IsZero() {
+			stats["dxcc_last_updated"] = dxccLastUpdate.Format(time.RFC3339)
+		} else {
+			stats["dxcc_last_updated"] = nil
+		}
+
+		if lotwLastUpdate, err := lotwClient.GetLastDownloadTime(context.Background()); err == nil && !lotwLastUpdate.IsZero() {
+			stats["lotw_last_updated"] = lotwLastUpdate.Format(time.RFC3339)
+		} else {
+			stats["lotw_last_updated"] = nil
 		}
 
 		if len(spots) > 0 {

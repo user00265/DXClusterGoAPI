@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	DBFileName  = "lotw.db" // Made public for use in main and tests
-	dbTableName = "lotw_users"
+	DBFileName        = "lotw.db" // Made public for use in main and tests
+	dbTableName       = "lotw_users"
+	metadataTableName = "lotw_metadata"
 )
 
 // DBTableName is exported for tests.
@@ -83,17 +84,115 @@ func NewClient(ctx context.Context, cfg config.Config, dbClient db.DBClient) (*C
 
 // createTable creates the lotw_users table if it doesn't exist.
 func (c *Client) createTable() error {
-	query := fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s (
-			callsign TEXT PRIMARY KEY,
-			last_upload_utc TEXT NOT NULL
-		);
-	`, dbTableName)
-	_, err := c.dbClient.GetDB().Exec(query)
-	return err
+	queries := []string{
+		fmt.Sprintf(`
+			CREATE TABLE IF NOT EXISTS %s (
+				callsign TEXT PRIMARY KEY,
+				last_upload_utc TEXT NOT NULL
+			);
+		`, dbTableName),
+		fmt.Sprintf(`
+			CREATE TABLE IF NOT EXISTS %s (
+				data_type TEXT PRIMARY KEY,
+				last_updated TEXT NOT NULL,
+				file_size INTEGER,
+				source_url TEXT
+			);
+		`, metadataTableName),
+	}
+
+	db := c.dbClient.GetDB()
+	for _, query := range queries {
+		if _, err := db.Exec(query); err != nil {
+			return fmt.Errorf("failed to execute query: %w\nQuery: %s", err, query)
+		}
+	}
+	return nil
 }
 
-// StartUpdater starts the periodic update job for LoTW data.
+// updateLastDownloadTime records when LoTW data was last downloaded.
+func (c *Client) updateLastDownloadTime(ctx context.Context, sourceURL string, fileSize int) error {
+	db := c.dbClient.GetDB()
+	query := fmt.Sprintf(`
+		INSERT OR REPLACE INTO %s (data_type, last_updated, file_size, source_url)
+		VALUES ('lotw', ?, ?, ?)
+	`, metadataTableName)
+
+	_, err := db.ExecContext(ctx, query, time.Now().UTC().Format(time.RFC3339), fileSize, sourceURL)
+	if err != nil {
+		return fmt.Errorf("failed to update LoTW download metadata: %w", err)
+	}
+	return nil
+}
+
+// GetLastDownloadTime retrieves when LoTW data was last downloaded.
+func (c *Client) GetLastDownloadTime(ctx context.Context) (time.Time, error) {
+	db := c.dbClient.GetDB()
+	query := fmt.Sprintf(`
+		SELECT last_updated FROM %s WHERE data_type = 'lotw'
+	`, metadataTableName)
+
+	var lastUpdated string
+	err := db.QueryRowContext(ctx, query).Scan(&lastUpdated)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// No record found, return zero time to indicate never downloaded
+			return time.Time{}, nil
+		}
+		return time.Time{}, fmt.Errorf("failed to query LoTW download metadata: %w", err)
+	}
+
+	t, err := time.Parse(time.RFC3339, lastUpdated)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to parse last download time: %w", err)
+	}
+	return t, nil
+}
+
+// needsUpdate checks if LoTW data needs to be updated based on the configured interval.
+func (c *Client) needsUpdate(ctx context.Context) (bool, error) {
+	lastUpdate, err := c.GetLastDownloadTime(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	// If never downloaded (zero time), needs update
+	if lastUpdate.IsZero() {
+		return true, nil
+	}
+
+	// Check if data is older than the update interval
+	if time.Since(lastUpdate) >= c.cfg.LoTWUpdateInterval {
+		return true, nil
+	}
+
+	// If last update was recent, also check if database actually has data
+	// This prevents the case where metadata says "updated recently" but database is empty
+	recordCount, err := c.getTableRecordCount(ctx, dbTableName)
+	if err != nil {
+		logging.Warn("Failed to count LoTW records, assuming update needed: %v", err)
+		return true, nil
+	}
+
+	// If table is empty despite recent update, force re-download
+	if recordCount == 0 {
+		logging.Info("LoTW database appears empty (%d records) despite recent update - forcing re-download", recordCount)
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// getTableRecordCount returns the number of records in the specified table.
+func (c *Client) getTableRecordCount(ctx context.Context, tableName string) (int, error) {
+	var count int
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
+	err := c.dbClient.GetDB().QueryRowContext(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count records in %s: %w", tableName, err)
+	}
+	return count, nil
+} // StartUpdater starts the periodic update job for LoTW data.
 func (c *Client) StartUpdater(ctx context.Context) {
 	if c.updateStop != nil {
 		return // already running
@@ -101,8 +200,22 @@ func (c *Client) StartUpdater(ctx context.Context) {
 	c.updateStop = make(chan struct{})
 	c.updateDone = make(chan struct{})
 
-	// Immediate run
-	go c.fetchAndStoreUsers(ctx)
+	// Check if initial update is needed
+	go func() {
+		needsUpdate, err := c.needsUpdate(ctx)
+		if err != nil {
+			logging.Error("Failed to check if LoTW data needs update: %v", err)
+			// Fallback to update on error
+			needsUpdate = true
+		}
+
+		if needsUpdate {
+			logging.Info("LoTW data needs update, fetching...")
+			c.fetchAndStoreUsers(ctx)
+		} else {
+			logging.Info("LoTW data is up to date, skipping initial download")
+		}
+	}()
 
 	go func() {
 		ticker := time.NewTicker(c.cfg.LoTWUpdateInterval)
@@ -120,7 +233,7 @@ func (c *Client) StartUpdater(ctx context.Context) {
 			}
 		}
 	}()
-	logging.Info("LoTW updater started. Initial update will run shortly, then every %s.", c.cfg.LoTWUpdateInterval)
+	logging.Info("LoTW updater started. Will check for updates every %s.", c.cfg.LoTWUpdateInterval)
 }
 
 // StopUpdater halts the periodic update and releases resources.
@@ -163,7 +276,14 @@ func (c *Client) fetchAndStoreUsers(ctx context.Context) error {
 		return fmt.Errorf("non-OK status: %s", resp.Status)
 	}
 
-	parsedUsers, err := parseLoTWCSV(resp.Body)
+	// Read the response body to get file size for metadata tracking
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logging.Error("[%s] Failed to read LoTW CSV response: %v", time.Now().Format(time.RFC3339), err)
+		return fmt.Errorf("failed to read LoTW CSV: %w", err)
+	}
+
+	parsedUsers, err := parseLoTWCSV(strings.NewReader(string(data)))
 	if err != nil {
 		logging.Error("[%s] Failed to parse LoTW CSV: %v", time.Now().Format(time.RFC3339), err)
 		return fmt.Errorf("failed to parse LoTW CSV: %w", err)
@@ -174,6 +294,12 @@ func (c *Client) fetchAndStoreUsers(ctx context.Context) error {
 		logging.Error("[%s] Failed to store LoTW users in DB: %v", time.Now().Format(time.RFC3339), err)
 		return fmt.Errorf("failed to store LoTW users: %w", err)
 	}
+
+	// Record the successful download
+	if err := c.updateLastDownloadTime(ctx, config.LoTWActivityURL, len(data)); err != nil {
+		logging.Warn("[%s] Failed to update LoTW download metadata: %v", time.Now().Format(time.RFC3339), err)
+	}
+
 	logging.Info("[%s] LoTW user activity update completed.", time.Now().Format(time.RFC3339))
 	return nil
 }

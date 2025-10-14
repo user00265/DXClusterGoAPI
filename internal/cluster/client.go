@@ -31,7 +31,7 @@ const (
 type Spot struct {
 	Spotter   string    `json:"spotter"`
 	Spotted   string    `json:"spotted"`
-	Frequency float64   `json:"frequency"` // In MHz
+	Frequency float64   `json:"frequency"` // In kHz (original format)
 	Message   string    `json:"message"`
 	When      time.Time `json:"when"`
 	Source    string    `json:"source"` // Name of the cluster it came from (e.g., "DXCluster", "SOTA")
@@ -58,6 +58,14 @@ type Client struct {
 	ErrorChan   chan error // For parse errors or connection issues
 
 	dxDelimRegex *regexp.Regexp // Pre-compiled regex for DX spots
+
+	// Heartbeat tracking
+	pingTicker      *time.Ticker
+	pingCount       int
+	lastPongTime    time.Time
+	heartbeatActive bool
+	initialPingDone bool
+
 	// Ensure SpotChan is closed exactly once on Close()
 	spotCloseOnce sync.Once
 	chanCloseOnce sync.Once
@@ -248,6 +256,11 @@ func (c *Client) connectOnce(ctx context.Context) error {
 // Close gracefully closes the connection.
 func (c *Client) Close() {
 	c.statusMutex.RLock()
+	// Stop heartbeat
+	if c.pingTicker != nil {
+		c.pingTicker.Stop()
+		c.pingTicker = nil
+	}
 	// Cancel the active readLoop (if any)
 	if c.cancel != nil {
 		c.cancel()
@@ -261,6 +274,16 @@ func (c *Client) Close() {
 	// Close the underlying connection to unblock any blocking reads (scanner.Scan).
 	c.statusMutex.Lock()
 	if c.conn != nil {
+		// Send graceful QUIT command before closing
+		logging.Debug("Sending QUIT command to DX cluster %s:%s", c.cfg.Host, c.cfg.Port)
+		_, err := c.conn.Write([]byte("QUIT\n"))
+		if err != nil {
+			logging.Debug("Failed to send QUIT to %s:%s: %v", c.cfg.Host, c.cfg.Port, err)
+		} else {
+			// Give the server a moment to close the connection gracefully
+			time.Sleep(100 * time.Millisecond)
+		}
+
 		// Set a short read deadline to ensure any blocking reads return
 		// quickly (scanner.Scan will observe the deadline). This helps
 		// avoid hangs where Close waits for readLoopDone indefinitely.
@@ -384,7 +407,23 @@ func (c *Client) readLoop(ctx context.Context) {
 		// Set a short read deadline so that reads unblock periodically and
 		// the loop can observe ctx cancellation.
 		_ = c.conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
-		line, err := reader.ReadString('\n')
+
+		var line string
+		var err error
+
+		if awaitingLogin {
+			// For login, use a different approach since prompt may not end with newline
+			buffer := make([]byte, 256)
+			n, readErr := c.conn.Read(buffer)
+			if readErr != nil {
+				err = readErr
+			} else if n > 0 {
+				line = string(buffer[:n])
+			}
+		} else {
+			// Normal operation: read complete lines
+			line, err = reader.ReadString('\n')
+		}
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				// Read timed out; loop and check ctx again.
@@ -399,6 +438,8 @@ func (c *Client) readLoop(ctx context.Context) {
 		}
 
 		line = strings.TrimRight(line, "\r\n")
+		// Strip ASCII bell characters that some clusters send
+		line = strings.ReplaceAll(line, "\a", "")
 		logging.Debug("DX cluster raw line received from %s: %q", net.JoinHostPort(c.cfg.Host, c.cfg.Port), line)
 
 		if awaitingLogin && strings.Contains(line, c.cfg.LoginPrompt) {
@@ -434,9 +475,21 @@ func (c *Client) readLoop(ctx context.Context) {
 
 // parseDX parses a single line for DX spot information.
 func (c *Client) parseDX(ctx context.Context, dxString string) {
+	logging.Debug("DX cluster parseDX called with: %q", dxString)
+
+	// Check for PONG response to our PING
+	if strings.HasPrefix(dxString, "PONG ") {
+		c.statusMutex.Lock()
+		c.lastPongTime = time.Now()
+		c.statusMutex.Unlock()
+		logging.Debug("Connection heartbeat -- server is alive (received PONG)")
+		return
+	}
+
 	if strings.HasPrefix(dxString, dxIDPrefix) {
 		logging.Debug("DX cluster parsing DX line: %q", dxString)
 		m := c.dxDelimRegex.FindStringSubmatch(dxString)
+		logging.Debug("DX cluster regex matched %d groups", len(m))
 		if len(m) < 5 { // Expecting at least up to the spotted call
 			c.safeSendError(fmt.Errorf("failed to parse DX string '%s' from %s", dxString, c.cfg.ClusterName))
 			c.safeSendMessage(dxString)
@@ -470,13 +523,23 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 		sp := Spot{
 			Spotter:   spotter,
 			Spotted:   spotted,
-			Frequency: frequency, // Already in MHz from cluster
+			Frequency: frequency, // Frequency in kHz from cluster (matching original format)
 			Message:   strings.TrimSpace(message),
 			When:      time.Now().UTC(), // Use current UTC for spot reception time
 			Source:    c.cfg.ClusterName,
 		}
 		c.safeSendSpot(sp)
 		logging.Info("DX cluster emitted spot: spotted=%s spotter=%s freq=%f msg=%q source=%s", sp.Spotted, sp.Spotter, sp.Frequency, sp.Message, sp.Source)
+
+		// Start initial heartbeat test after first spot
+		c.statusMutex.Lock()
+		if !c.initialPingDone {
+			c.initialPingDone = true
+			c.statusMutex.Unlock()
+			go c.startInitialHeartbeatTest(ctx)
+		} else {
+			c.statusMutex.Unlock()
+		}
 	} else {
 		c.safeSendMessage(dxString)
 		logging.Debug("DX cluster emitted generic message: %q", dxString)
@@ -484,13 +547,14 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 }
 
 // parseFrequency converts a frequency string to float64, handling potential commas as decimal points.
-// DX clusters typically send MHz, so parseFloat is usually direct.
+// DX clusters typically send kHz, so we preserve the original kHz values.
 func ParseFrequency(freqStr string) (float64, error) {
 	freqStr = strings.ReplaceAll(freqStr, ",", ".") // Ensure decimal is a dot
 	freq, err := strconv.ParseFloat(freqStr, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid frequency format '%s': %w", freqStr, err)
 	}
+	// Keep original kHz values to match original application format
 	return freq, nil
 }
 
@@ -523,6 +587,7 @@ func (c *Client) safeSendMessage(msg string) {
 }
 
 func (c *Client) safeSendSpot(sp Spot) {
+	logging.Debug("DX cluster sending spot: %s -> %s @ %.1f kHz", sp.Spotter, sp.Spotted, sp.Frequency)
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Warn("Recovered from panic sending spot to closed SpotChan for %s: %v", c.cfg.ClusterName, r)
@@ -530,6 +595,104 @@ func (c *Client) safeSendSpot(sp Spot) {
 	}()
 	select {
 	case c.SpotChan <- sp:
+		logging.Debug("DX cluster spot sent successfully")
 	default:
+		logging.Warn("DX cluster spot channel full, dropping spot")
 	}
+}
+
+// startInitialHeartbeatTest sends the first PING after receiving the first spot
+// and waits 30 seconds for PONG. If successful, starts regular heartbeat.
+func (c *Client) startInitialHeartbeatTest(ctx context.Context) {
+	logging.Info("Starting initial heartbeat test for %s:%s (30 second timeout)", c.cfg.Host, c.cfg.Port)
+
+	// Send initial PING
+	if err := c.write(ctx, "PING"); err != nil {
+		logging.Warn("Failed to send initial PING to %s:%s: %v - heartbeat disabled", c.cfg.Host, c.cfg.Port, err)
+		return
+	}
+
+	c.statusMutex.Lock()
+	c.pingCount = 1
+	initialPingTime := time.Now()
+	c.statusMutex.Unlock()
+
+	logging.Debug("Sent initial PING to %s:%s - waiting for PONG", c.cfg.Host, c.cfg.Port)
+
+	// Wait 30 seconds for PONG response
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+
+	ticker := time.NewTicker(100 * time.Millisecond) // Check every 100ms
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			logging.Debug("Initial heartbeat test cancelled for %s:%s", c.cfg.Host, c.cfg.Port)
+			return
+		case <-timeout.C:
+			logging.Warn("Initial heartbeat test failed for %s:%s - no PONG received within 30 seconds, heartbeat disabled", c.cfg.Host, c.cfg.Port)
+			return
+		case <-ticker.C:
+			c.statusMutex.RLock()
+			lastPong := c.lastPongTime
+			c.statusMutex.RUnlock()
+
+			if lastPong.After(initialPingTime) {
+				logging.Info("Initial heartbeat test successful for %s:%s - enabling regular heartbeat", c.cfg.Host, c.cfg.Port)
+				c.startRegularHeartbeat(ctx)
+				return
+			}
+		}
+	}
+}
+
+// startRegularHeartbeat begins the regular PING/PONG heartbeat mechanism.
+// Sends PING every 10-15 minutes to keep the connection alive.
+func (c *Client) startRegularHeartbeat(ctx context.Context) {
+	c.statusMutex.Lock()
+	defer c.statusMutex.Unlock()
+
+	if c.pingTicker != nil {
+		c.pingTicker.Stop() // Stop any existing ticker
+	}
+
+	// Set ping interval between 10-15 minutes (we'll use 12 minutes)
+	pingInterval := 12 * time.Minute
+	c.pingTicker = time.NewTicker(pingInterval)
+	c.heartbeatActive = true
+
+	logging.Info("Starting regular heartbeat for %s:%s (interval: %v)", c.cfg.Host, c.cfg.Port, pingInterval)
+
+	go func() {
+		defer func() {
+			c.statusMutex.Lock()
+			if c.pingTicker != nil {
+				c.pingTicker.Stop()
+				c.pingTicker = nil
+			}
+			c.heartbeatActive = false
+			c.statusMutex.Unlock()
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				logging.Debug("Regular heartbeat stopped for %s:%s (context cancelled)", c.cfg.Host, c.cfg.Port)
+				return
+			case <-c.pingTicker.C:
+				c.statusMutex.Lock()
+				c.pingCount++
+				pingNum := c.pingCount
+				c.statusMutex.Unlock()
+
+				if err := c.write(ctx, "PING"); err != nil {
+					logging.Warn("Failed to send PING #%d to %s:%s: %v", pingNum, c.cfg.Host, c.cfg.Port, err)
+				} else {
+					logging.Debug("Sent PING #%d to %s:%s", pingNum, c.cfg.Host, c.cfg.Port)
+				}
+			}
+		}
+	}()
 }

@@ -30,15 +30,25 @@ const (
 	prefixesTableName   = "dxcc_prefixes"
 	entitiesTableName   = "dxcc_entities"
 	exceptionsTableName = "dxcc_exceptions"
+	metadataTableName   = "dxcc_metadata"
 	// temp table for ituz update after main inserts - removed as ituz is directly in entity
 	apiTimeout = 60 * time.Second // Longer timeout for large gzipped file download
 )
 
-// --- XML Parsing Structs (cty.xml structure) ---
+// --- XML Parsing Structs (both legacy cty.xml and new clublog format) ---
 
-// CtyXML represents the root of the cty.xml file.
+// CtyXML represents the root of the legacy cty.xml file.
 type CtyXML struct {
 	XMLName    xml.Name   `xml:"cty"`
+	Prefixes   Prefixes   `xml:"prefixes"`
+	Exceptions Exceptions `xml:"exceptions"`
+	Entities   Entities   `xml:"entities"`
+}
+
+// ClubLogXML represents the root of the new Club Log XML format.
+type ClubLogXML struct {
+	XMLName    xml.Name   `xml:"clublog"`
+	Date       string     `xml:"date,attr"`
 	Prefixes   Prefixes   `xml:"prefixes"`
 	Exceptions Exceptions `xml:"exceptions"`
 	Entities   Entities   `xml:"entities"`
@@ -237,10 +247,18 @@ func (c *Client) Close() {
 
 // createTables creates the DXCC tables if they don't exist.
 func (c *Client) createTables() error {
+	// First, drop existing tables to ensure new schema
+	dropQueries := []string{
+		fmt.Sprintf("DROP TABLE IF EXISTS %s", prefixesTableName),
+		fmt.Sprintf("DROP TABLE IF EXISTS %s", exceptionsTableName),
+		fmt.Sprintf("DROP TABLE IF EXISTS %s", entitiesTableName),
+	}
+
 	queries := []string{
 		fmt.Sprintf(`
 			CREATE TABLE IF NOT EXISTS %s (
-				call TEXT PRIMARY KEY,
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				call TEXT NOT NULL,
 				entity TEXT NOT NULL,
 				adif INTEGER NOT NULL,
 				cqz INTEGER NOT NULL,
@@ -248,12 +266,14 @@ func (c *Client) createTables() error {
 				long REAL NOT NULL,
 				lat REAL NOT NULL,
 				start TEXT,
-				end TEXT
+				end TEXT,
+				UNIQUE(call, start, end, adif)
 			);
 		`, prefixesTableName),
 		fmt.Sprintf(`
 			CREATE TABLE IF NOT EXISTS %s (
-				call TEXT PRIMARY KEY,
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				call TEXT NOT NULL,
 				entity TEXT NOT NULL,
 				adif INTEGER NOT NULL,
 				cqz INTEGER NOT NULL,
@@ -261,7 +281,8 @@ func (c *Client) createTables() error {
 				long REAL NOT NULL,
 				lat REAL NOT NULL,
 				start TEXT,
-				end TEXT
+				end TEXT,
+				UNIQUE(call, start, end, adif)
 			);
 		`, exceptionsTableName),
 		fmt.Sprintf(`
@@ -278,15 +299,129 @@ func (c *Client) createTables() error {
 				end TEXT
 			);
 		`, entitiesTableName),
+		fmt.Sprintf(`
+			CREATE TABLE IF NOT EXISTS %s (
+				data_type TEXT PRIMARY KEY,
+				last_updated TEXT NOT NULL,
+				file_size INTEGER,
+				source_url TEXT
+			);
+		`, metadataTableName),
 	}
 
 	db := c.dbClient.GetDB()
+
+	// Drop existing tables first
+	for _, query := range dropQueries {
+		if _, err := db.Exec(query); err != nil {
+			return fmt.Errorf("failed to drop table: %w\nQuery: %s", err, query)
+		}
+	}
+
+	// Create new tables with updated schema
 	for _, query := range queries {
 		if _, err := db.Exec(query); err != nil {
 			return fmt.Errorf("failed to execute query: %w\nQuery: %s", err, query)
 		}
 	}
 	return nil
+}
+
+// updateLastDownloadTime records when DXCC data was last downloaded.
+func (c *Client) updateLastDownloadTime(ctx context.Context, sourceURL string, fileSize int) error {
+	db := c.dbClient.GetDB()
+	query := fmt.Sprintf(`
+		INSERT OR REPLACE INTO %s (data_type, last_updated, file_size, source_url)
+		VALUES ('dxcc', ?, ?, ?)
+	`, metadataTableName)
+
+	_, err := db.ExecContext(ctx, query, time.Now().UTC().Format(time.RFC3339), fileSize, sourceURL)
+	if err != nil {
+		return fmt.Errorf("failed to update DXCC download metadata: %w", err)
+	}
+	return nil
+}
+
+// GetLastDownloadTime retrieves when DXCC data was last downloaded.
+func (c *Client) GetLastDownloadTime(ctx context.Context) (time.Time, error) {
+	db := c.dbClient.GetDB()
+	query := fmt.Sprintf(`
+		SELECT last_updated FROM %s WHERE data_type = 'dxcc'
+	`, metadataTableName)
+
+	var lastUpdated string
+	err := db.QueryRowContext(ctx, query).Scan(&lastUpdated)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// No record found, return zero time to indicate never downloaded
+			return time.Time{}, nil
+		}
+		return time.Time{}, fmt.Errorf("failed to query DXCC download metadata: %w", err)
+	}
+
+	t, err := time.Parse(time.RFC3339, lastUpdated)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to parse last download time: %w", err)
+	}
+	return t, nil
+}
+
+// needsUpdate checks if DXCC data needs to be updated based on the configured interval.
+func (c *Client) needsUpdate(ctx context.Context) (bool, error) {
+	lastUpdate, err := c.GetLastDownloadTime(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	// If never downloaded (zero time), needs update
+	if lastUpdate.IsZero() {
+		return true, nil
+	}
+
+	// Check if data is older than the update interval
+	if time.Since(lastUpdate) >= c.cfg.DXCCUpdateInterval {
+		return true, nil
+	}
+
+	// If last update was recent, also check if database actually has data
+	// This prevents the case where metadata says "updated recently" but database is empty
+	prefixCount, err := c.getTableRecordCount(ctx, prefixesTableName)
+	if err != nil {
+		logging.Warn("Failed to count DXCC prefixes, assuming update needed: %v", err)
+		return true, nil
+	}
+
+	exceptionCount, err := c.getTableRecordCount(ctx, exceptionsTableName)
+	if err != nil {
+		logging.Warn("Failed to count DXCC exceptions, assuming update needed: %v", err)
+		return true, nil
+	}
+
+	entityCount, err := c.getTableRecordCount(ctx, entitiesTableName)
+	if err != nil {
+		logging.Warn("Failed to count DXCC entities, assuming update needed: %v", err)
+		return true, nil
+	}
+
+	// If any table is empty despite recent update, force re-download
+	if prefixCount == 0 || exceptionCount == 0 || entityCount == 0 {
+		logging.Info("DXCC database appears empty (prefixes=%d, exceptions=%d, entities=%d) despite recent update - forcing re-download",
+			prefixCount, exceptionCount, entityCount)
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// getTableRecordCount returns the number of records in the specified table.
+func (c *Client) getTableRecordCount(ctx context.Context, tableName string) (int, error) {
+	var count int
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
+	err := c.dbClient.GetDB().QueryRowContext(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count records in %s: %w", tableName, err)
+	}
+	return count, nil
 }
 
 // loadMapsFromDB loads DXCC prefixes, exceptions, and entities into in-memory maps.
@@ -383,8 +518,17 @@ func (c *Client) loadMapsFromDB(ctx context.Context) error {
 		return fmt.Errorf("error iterating dxcc_entities rows: %w", err)
 	}
 
-	logging.Info("DXCC data loaded: %d prefixes, %d exceptions, %d entities.",
-		len(c.prefixesMap), len(c.exceptionsMap), len(c.entitiesMap))
+	prefixCount := len(c.prefixesMap)
+	exceptionCount := len(c.exceptionsMap)
+	entityCount := len(c.entitiesMap)
+
+	// Only log at INFO level if we actually have data, otherwise use DEBUG
+	if prefixCount > 0 || exceptionCount > 0 || entityCount > 0 {
+		logging.Info("DXCC data loaded: %d prefixes, %d exceptions, %d entities.", prefixCount, exceptionCount, entityCount)
+	} else {
+		logging.Debug("DXCC data loaded: %d prefixes, %d exceptions, %d entities (empty - will check for updates).", prefixCount, exceptionCount, entityCount)
+	}
+
 	// Update exported references for tests and callers
 	c.PrefixesMap = c.prefixesMap
 	c.ExceptionsMap = c.exceptionsMap
@@ -400,8 +544,22 @@ func (c *Client) StartUpdater(ctx context.Context) {
 	c.updateStop = make(chan struct{})
 	c.updateDone = make(chan struct{})
 
-	// Immediate run
-	go c.fetchAndStoreData(ctx)
+	// Check if initial update is needed
+	go func() {
+		needsUpdate, err := c.needsUpdate(ctx)
+		if err != nil {
+			logging.Error("Failed to check if DXCC data needs update: %v", err)
+			// Fallback to update on error
+			needsUpdate = true
+		}
+
+		if needsUpdate {
+			logging.Info("DXCC data needs update, fetching...")
+			c.fetchAndStoreData(ctx)
+		} else {
+			logging.Info("DXCC data is up to date, skipping initial download")
+		}
+	}()
 
 	go func() {
 		ticker := time.NewTicker(c.cfg.DXCCUpdateInterval)
@@ -419,15 +577,16 @@ func (c *Client) StartUpdater(ctx context.Context) {
 			}
 		}
 	}()
-	logging.Info("DXCC updater started. Initial update will run shortly, then every %s.", c.cfg.DXCCUpdateInterval)
+	logging.Info("DXCC updater started. Will check for updates every %s.", c.cfg.DXCCUpdateInterval)
 }
 
 // fetchAndStoreData downloads the cty.xml.gz, parses it, and replaces data in the database.
 func (c *Client) fetchAndStoreData(ctx context.Context) {
 	logging.Info("[%s] Fetching DXCC data...", time.Now().Format(time.RFC3339))
 	var (
-		data []byte
-		err  error
+		data      []byte
+		err       error
+		sourceURL string
 	)
 
 	// Attempt Club Log first with retry logic (use configured API key if present)
@@ -451,6 +610,7 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 	// Manual retry loop for Club Log (3 attempts, 5s between)
 	for i := 0; i < 3; i++ {
 		if err = op(); err == nil {
+			sourceURL = clubURL
 			break
 		}
 		if i < 2 {
@@ -476,6 +636,7 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 		}
 		for i := 0; i < 3; i++ {
 			if err = op(); err == nil {
+				sourceURL = fallback
 				break
 			}
 			if i < 2 {
@@ -520,6 +681,12 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 		logging.Error("[%s] Failed to store DXCC data in DB: %v", time.Now().Format(time.RFC3339), err)
 	} else {
 		logging.Info("[%s] DXCC data update completed. Reloading in-memory maps.", time.Now().Format(time.RFC3339))
+
+		// Record the successful download
+		if err := c.updateLastDownloadTime(ctx, sourceURL, len(data)); err != nil {
+			logging.Warn("[%s] Failed to update DXCC download metadata: %v", time.Now().Format(time.RFC3339), err)
+		}
+
 		// Reload in-memory maps after DB update
 		if err := c.loadMapsFromDB(ctx); err != nil {
 			logging.Error("[%s] Failed to reload DXCC maps after update: %v", time.Now().Format(time.RFC3339), err)
@@ -571,19 +738,143 @@ func (c *Client) downloadGzippedXML(ctx context.Context, url string) ([]byte, er
 }
 
 // decompressAndParseXML decompresses the data and unmarshals it into CtyXML struct.
+// Supports both legacy <cty> format and new <clublog> format.
 func (c *Client) decompressAndParseXML(data []byte) (*CtyXML, error) {
 	var ctyData CtyXML
 
-	// First, try to unmarshal using a Decoder that supports declared charset (e.g., ISO-8859-1)
+	// First, try to unmarshal as legacy <cty> format
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.CharsetReader = charset.NewReaderLabel
 	if err := dec.Decode(&ctyData); err == nil {
 		return &ctyData, nil
 	} else {
-		logging.Debug("DXCC decompressAndParseXML: initial xml.Decode error: %v", err)
+		logging.Debug("DXCC decompressAndParseXML: legacy <cty> format failed: %v", err)
 	}
 
-	// If the top-level XML isn't <cty>, try to find an inner <cty>...</cty> segment
+	// Try new <clublog> format
+	var clubLogData ClubLogXML
+	dec = xml.NewDecoder(bytes.NewReader(data))
+	dec.CharsetReader = charset.NewReaderLabel
+	if err := dec.Decode(&clubLogData); err == nil {
+		// Convert ClubLogXML to CtyXML format by parsing Club Log structure differently
+
+		// Define Club Log specific structures
+		type ClubLogEntity struct {
+			ADIF    int     `xml:"adif"` // Element, not attribute
+			Name    string  `xml:"name"`
+			Prefix  string  `xml:"prefix"`
+			Deleted bool    `xml:"deleted"`
+			CQZ     int     `xml:"cqz"`
+			Cont    string  `xml:"cont"`
+			Long    float64 `xml:"long"`
+			Lat     float64 `xml:"lat"`
+			Start   string  `xml:"start"`
+			End     string  `xml:"end"`
+		}
+
+		type ClubLogPrefix struct {
+			Call   string  `xml:"call"`
+			Entity string  `xml:"entity"`
+			ADIF   int     `xml:"adif"`
+			CQZ    int     `xml:"cqz"`
+			Cont   string  `xml:"cont"`
+			Long   float64 `xml:"long"`
+			Lat    float64 `xml:"lat"`
+			Start  string  `xml:"start"`
+			End    string  `xml:"end"`
+		}
+
+		type ClubLogException struct {
+			Call   string  `xml:"call"`
+			Entity string  `xml:"entity"`
+			ADIF   int     `xml:"adif"`
+			CQZ    int     `xml:"cqz"`
+			Cont   string  `xml:"cont"`
+			Long   float64 `xml:"long"`
+			Lat    float64 `xml:"lat"`
+			Start  string  `xml:"start"`
+			End    string  `xml:"end"`
+		}
+
+		type ClubLogData struct {
+			XMLName    xml.Name           `xml:"clublog"`
+			Date       string             `xml:"date,attr"`
+			Entities   []ClubLogEntity    `xml:"entities>entity"`
+			Prefixes   []ClubLogPrefix    `xml:"prefixes>prefix"`
+			Exceptions []ClubLogException `xml:"exceptions>exception"`
+		}
+
+		// Re-parse with correct Club Log structure
+		var correctClubLogData ClubLogData
+		dec2 := xml.NewDecoder(bytes.NewReader(data))
+		dec2.CharsetReader = charset.NewReaderLabel
+		if err := dec2.Decode(&correctClubLogData); err != nil {
+			logging.Debug("DXCC decompressAndParseXML: Club Log re-parse failed: %v", err)
+			return nil, fmt.Errorf("failed to parse Club Log format: %w", err)
+		}
+
+		// Convert to legacy format
+		var entities []Entity
+		for _, e := range correctClubLogData.Entities {
+			if !e.Deleted { // Skip deleted entities
+				entities = append(entities, Entity{
+					ADIF:   e.ADIF,
+					Name:   e.Name,
+					Prefix: e.Prefix,
+					ITUZ:   0, // Club Log doesn't provide ITU zone in entities, will be set later
+					CQZ:    e.CQZ,
+					Cont:   e.Cont,
+					Long:   e.Long,
+					Lat:    e.Lat,
+					Start:  e.Start,
+					End:    e.End,
+				})
+			}
+		}
+
+		var prefixes []Prefix
+		for _, p := range correctClubLogData.Prefixes {
+			prefixes = append(prefixes, Prefix{
+				Call:   p.Call,
+				Entity: p.Entity,
+				ADIF:   p.ADIF,
+				CQZ:    p.CQZ,
+				Cont:   p.Cont,
+				Long:   p.Long,
+				Lat:    p.Lat,
+				Start:  p.Start,
+				End:    p.End,
+			})
+		}
+
+		var exceptions []Exception
+		for _, ex := range correctClubLogData.Exceptions {
+			exceptions = append(exceptions, Exception{
+				Call:   ex.Call,
+				Entity: ex.Entity,
+				ADIF:   ex.ADIF,
+				CQZ:    ex.CQZ,
+				Cont:   ex.Cont,
+				Long:   ex.Long,
+				Lat:    ex.Lat,
+				Start:  ex.Start,
+				End:    ex.End,
+			})
+		}
+
+		ctyData = CtyXML{
+			Prefixes:   Prefixes{Prefix: prefixes},
+			Exceptions: Exceptions{Exception: exceptions},
+			Entities:   Entities{Entity: entities},
+		}
+
+		logging.Debug("DXCC decompressAndParseXML: successfully parsed <clublog> format dated %s", correctClubLogData.Date)
+		return &ctyData, nil
+	} else {
+		logging.Debug("DXCC decompressAndParseXML: <clublog> format failed: %v", err)
+	}
+
+	// If both formats failed, try the fallback logic for malformed XML
 	dataStr := string(data)
 	// Diagnostic info
 	head := dataStr
@@ -591,32 +882,67 @@ func (c *Client) decompressAndParseXML(data []byte) (*CtyXML, error) {
 		head = head[:200]
 	}
 	logging.Debug("DXCC decompressAndParseXML: data length=%d, head=%q", len(data), head)
+
+	// Try to find <cty> segment first
 	startIdx := strings.Index(dataStr, "<cty")
 	endIdx := strings.LastIndex(dataStr, "</cty>")
-	logging.Debug("DXCC decompressAndParseXML: startIdx=%d endIdx=%d", startIdx, endIdx)
-	if startIdx == -1 || endIdx == -1 {
-		// Try a tolerant approach: if the data contains prefixes/entities but lacks the cty wrapper,
-		// wrap the content in <cty>...</cty> and attempt to unmarshal.
-		if (strings.Contains(dataStr, "<prefixes") || strings.Contains(dataStr, "<entities")) && startIdx == -1 {
-			wrapped := []byte("<cty>" + dataStr + "</cty>")
-			if err := xml.Unmarshal(wrapped, &ctyData); err == nil {
-				return &ctyData, nil
+	logging.Debug("DXCC decompressAndParseXML: <cty> startIdx=%d endIdx=%d", startIdx, endIdx)
+
+	if startIdx != -1 && endIdx != -1 {
+		endIdx += len("</cty>")
+		inner := []byte(dataStr[startIdx:endIdx])
+		if err := xml.Unmarshal(inner, &ctyData); err == nil {
+			return &ctyData, nil
+		}
+	}
+
+	// Try to find <clublog> segment
+	startIdx = strings.Index(dataStr, "<clublog")
+	endIdx = strings.LastIndex(dataStr, "</clublog>")
+	logging.Debug("DXCC decompressAndParseXML: <clublog> startIdx=%d endIdx=%d", startIdx, endIdx)
+
+	if startIdx != -1 && endIdx != -1 {
+		endIdx += len("</clublog>")
+		inner := []byte(dataStr[startIdx:endIdx])
+		var clubLogData ClubLogXML
+		if err := xml.Unmarshal(inner, &clubLogData); err == nil {
+			ctyData = CtyXML{
+				Prefixes:   clubLogData.Prefixes,
+				Exceptions: clubLogData.Exceptions,
+				Entities:   clubLogData.Entities,
 			}
+			return &ctyData, nil
 		}
-		// Diagnostic: print a snippet of the data to aid debugging in tests
-		snippet := dataStr
-		if len(snippet) > 400 {
-			snippet = snippet[:400]
+	}
+
+	// Try tolerant approach: if the data contains prefixes/entities but lacks wrapper,
+	// wrap the content and attempt to unmarshal.
+	if strings.Contains(dataStr, "<prefixes") || strings.Contains(dataStr, "<entities") {
+		// Try wrapping with <cty>
+		wrapped := []byte("<cty>" + dataStr + "</cty>")
+		if err := xml.Unmarshal(wrapped, &ctyData); err == nil {
+			return &ctyData, nil
 		}
-		logging.Debug("DXCC decompressAndParseXML: could not find <cty> in data snippet: %s", snippet)
-		return nil, fmt.Errorf("failed to unmarshal cty.xml and could not locate <cty> element")
+		// Try wrapping with <clublog>
+		wrapped = []byte("<clublog>" + dataStr + "</clublog>")
+		var clubLogData ClubLogXML
+		if err := xml.Unmarshal(wrapped, &clubLogData); err == nil {
+			ctyData = CtyXML{
+				Prefixes:   clubLogData.Prefixes,
+				Exceptions: clubLogData.Exceptions,
+				Entities:   clubLogData.Entities,
+			}
+			return &ctyData, nil
+		}
 	}
-	endIdx += len("</cty>")
-	inner := []byte(dataStr[startIdx:endIdx])
-	if err := xml.Unmarshal(inner, &ctyData); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal inner cty.xml segment: %w", err)
+
+	// Diagnostic: print a snippet of the data to aid debugging
+	snippet := dataStr
+	if len(snippet) > 400 {
+		snippet = snippet[:400]
 	}
-	return &ctyData, nil
+	logging.Debug("DXCC decompressAndParseXML: could not parse as <cty> or <clublog> format. Data snippet: %s", snippet)
+	return nil, fmt.Errorf("failed to unmarshal XML: tried both <cty> and <clublog> formats")
 }
 
 // replaceDataInDB truncates tables and inserts new data in a single transaction.

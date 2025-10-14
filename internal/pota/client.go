@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,15 +28,25 @@ const (
 
 // PotaRawSpot represents the structure of a raw spot from the POTA API.
 type PotaRawSpot struct {
-	SpotID       int       `json:"spotId"`
-	Activator    string    `json:"activator"`
-	Reference    string    `json:"reference"`
-	Frequency    float64   `json:"frequency"` // Frequency in MHz
-	Mode         string    `json:"mode"`
-	Spotter      string    `json:"spotter"`
-	Name         string    `json:"name"`
-	LocationDesc string    `json:"locationDesc"`
-	SpotTime     time.Time `json:"spotTime"` // POTA API returns ISO 8601, Go's time.Time can parse this.
+	SpotID       int     `json:"spotId"`
+	Activator    string  `json:"activator"`
+	Reference    string  `json:"reference"`
+	Frequency    string  `json:"frequency"` // API returns as string (e.g., "14005.3")
+	Mode         string  `json:"mode"`
+	Spotter      string  `json:"spotter"`
+	Name         string  `json:"name"`
+	LocationDesc string  `json:"locationDesc"`
+	SpotTime     string  `json:"spotTime"` // API returns as string "2025-10-14T09:20:33" (no timezone)
+	Comments     string  `json:"comments"`
+	Source       string  `json:"source"` // "Web", "RBN", etc.
+	Grid4        string  `json:"grid4"`
+	Grid6        string  `json:"grid6"`
+	Latitude     float64 `json:"latitude"`
+	Longitude    float64 `json:"longitude"`
+	Count        int     `json:"count"`
+	Expire       int     `json:"expire"`   // Expiry time in seconds
+	Invalid      *string `json:"invalid"`  // Can be null
+	ParkName     *string `json:"parkName"` // Can be null
 }
 
 // Spot represents a parsed POTA spot, to be consistent with DXCluster Spot.
@@ -355,15 +366,31 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 	logging.Debug("[%s] Received %d raw POTA spots.", time.Now().Format(time.RFC3339), len(rawSpots))
 
 	for _, item := range rawSpots {
-		if item.Frequency == 0 { // Ignore spots without valid frequency
-			logging.Warn("POTA received spot with no frequency: %+v", item)
+		// Parse frequency from string to float64
+		freq, err := strconv.ParseFloat(item.Frequency, 64)
+		if err != nil || freq == 0 {
+			logging.Warn("POTA received spot with invalid frequency '%s': %v", item.Frequency, err)
 			continue
+		}
+
+		// POTA API returns frequency in kHz, convert to MHz
+		freqMHz := freq / 1000.0
+
+		// Parse spot time from string to time.Time
+		spotTime, err := time.Parse("2006-01-02T15:04:05", item.SpotTime)
+		if err != nil {
+			logging.Warn("POTA received spot with invalid time '%s': %v", item.SpotTime, err)
+			// Use current time as fallback
+			spotTime = time.Now().UTC()
+		} else {
+			// Assume UTC since no timezone is provided by POTA API
+			spotTime = spotTime.UTC()
 		}
 
 		potaSpot := Spot{
 			Spotter:   item.Spotter,
 			Spotted:   item.Activator,
-			Frequency: item.Frequency,
+			Frequency: freqMHz,
 			// Build message without extra parentheses to match tests' expected canonicalization
 			Message: fmt.Sprintf("%s%sPOTA @ %s %s %s", item.Mode, func() string {
 				if item.Mode != "" {
@@ -371,13 +398,13 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 				}
 				return ""
 			}(), item.Reference, item.Name, item.LocationDesc),
-			When:   time.Now().UTC(), // Use current UTC time, mirroring original JS
+			When:   spotTime,
 			Source: "pota",
 		}
 		potaSpot.AdditionalData.PotaRef = item.Reference
 		potaSpot.AdditionalData.PotaMode = item.Mode
 
-		logging.Debug("POTA received raw spot: activator=%s spotter=%s freq=%f mode=%s ref=%s", item.Activator, item.Spotter, item.Frequency, item.Mode, item.Reference)
+		logging.Debug("POTA received raw spot: activator=%s spotter=%s freq=%.1f mode=%s ref=%s", item.Activator, item.Spotter, freq, item.Mode, item.Reference)
 		isNewSpot, err := c.cacher.IsSpotInCache(ctx, potaSpot, item.Mode)
 		if err != nil {
 			logging.Error("[%s] Failed to check POTA spot cache: %v", time.Now().Format(time.RFC3339), err)
