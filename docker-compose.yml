@@ -24,12 +24,12 @@ services:
       # DX Cluster Configuration (can be overridden by CLUSTERS JSON)
       DXHOST: "dxfun.com"
       DXPORT: "8000"
-      DXCALL: "YOUR_CALLSIGN_HERE" # REQUIRED
+      CALLSIGN: "YOUR_CALLSIGN_HERE" # REQUIRED
       DXPASSWORD: "" # Leave blank if no password
 
       # Multiple DX Clusters via JSON array (overrides individual DXHOST/PORT/CALL)
       # Example: CLUSTERS='[{"host":"dxfun.com","port":"8000","call":"MYCALL","password":"MYPASS","loginPrompt":"login:","cluster":"DXFun"},{"host":"cluster.sota.org.uk","port":"7300","call":"MYCALL","loginPrompt":"login:","cluster":"SOTA"}]'
-      CLUSTERS: '[{"host":"dxfun.com","port":"8000","call":"YOUR_CALLSIGN_HERE","password":"","loginPrompt":"Please enter your call:","cluster":"DXFun"},{"host":"cluster.sota.org.uk","port":"7300","call":"YOUR_CALLSIGN_HERE","loginPrompt":"Please enter your call:","cluster":"SOTA"}]'
+      CLUSTERS: '[{"host":"dxfun.com","port":"8000","call":"YOUR_CALLSIGN_HERE","password":"","loginPrompt":"login:","cluster":"DXFun"},{"host":"cluster.sota.org.uk","port":"7300","call":"YOUR_CALLSIGN_HERE","loginPrompt":"login:","cluster":"SOTA"}]'
 
       # POTA Integration
       POTA_INTEGRATION: "true" # "true" or "false"
