@@ -39,7 +39,7 @@ type Spot struct {
 
 // MarshalJSON customizes the JSON output to match the expected API format
 func (s Spot) MarshalJSON() ([]byte, error) {
-	// Helper to build the flattened DXCC+LoTW object
+	// Helper to build the flattened DXCC+LoTW+POTA object
 	type FlatInfo struct {
 		Cont     string      `json:"cont,omitempty"`
 		Entity   string      `json:"entity,omitempty"`
@@ -49,9 +49,14 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 		Lat      interface{} `json:"lat,omitempty"`     // string in output
 		Lng      interface{} `json:"lng,omitempty"`     // string in output
 		CQZ      interface{} `json:"cqz,omitempty"`     // string in output - CQ Zone
+		PotaRef  string      `json:"pota_ref,omitempty"`
+		PotaMode string      `json:"pota_mode,omitempty"`
 	}
 
-	buildFlatInfo := func(info Info) *FlatInfo {
+	buildFlatInfo := func(info Info, additionalData struct {
+		PotaRef  string `json:"pota_ref,omitempty"`
+		PotaMode string `json:"pota_mode,omitempty"`
+	}) *FlatInfo {
 		flat := &FlatInfo{}
 		if info.DXCC != nil {
 			flat.Cont = info.DXCC.Cont
@@ -77,6 +82,9 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 		} else {
 			flat.LoTWUser = false
 		}
+		// Add POTA information
+		flat.PotaRef = additionalData.PotaRef
+		flat.PotaMode = additionalData.PotaMode
 		return flat
 	}
 
@@ -102,8 +110,8 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 		Message:     s.Message,
 		When:        s.When,
 		Source:      s.Source,
-		DXCCSpotter: buildFlatInfo(s.SpotterInfo),
-		DXCCSpotted: buildFlatInfo(s.SpottedInfo),
+		DXCCSpotter: buildFlatInfo(s.SpotterInfo, s.AdditionalData),
+		DXCCSpotted: buildFlatInfo(s.SpottedInfo, s.AdditionalData),
 		Band:        s.Band,
 		PotaRef:     s.AdditionalData.PotaRef,
 		PotaMode:    s.AdditionalData.PotaMode,
