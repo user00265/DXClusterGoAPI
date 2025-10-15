@@ -105,7 +105,7 @@ func NewClient(cfg config.ClusterConfig) (*Client, error) {
 	dxDelimRegex := regexp.MustCompile(`^(DX de) +([A-Z0-9_\/\-#]{3,}):? *([0-9]+(?:\.[0-9]+)?) +([A-Z0-9_\/\-#]{3,}) *(.*?) +(\d{4})Z *([A-Z]{2}\d{2})?`)
 
 	// determine buffer size: prefer per-cluster config, fall back to
-	// DXC_CHANNEL_BUFFER env var, then to a conservative default of 8.
+	// DXC_CHANNEL_BUFFER env var, then to a conservative default of 32.
 	buf := cfg.ChannelBuffer
 	if buf <= 0 {
 		if v := os.Getenv("DXC_CHANNEL_BUFFER"); v != "" {
@@ -115,7 +115,7 @@ func NewClient(cfg config.ClusterConfig) (*Client, error) {
 		}
 	}
 	if buf <= 0 {
-		buf = 8
+		buf = 32
 	}
 
 	return &Client{

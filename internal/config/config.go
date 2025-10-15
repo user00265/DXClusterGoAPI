@@ -71,7 +71,7 @@ type ClusterConfig struct {
 	Callsign      string       `json:"call"`          // Optional: callsign (uses global CALLSIGN if not set)
 	LoginPrompt   string       `json:"loginPrompt"`   // Optional: login prompt to expect (default "login:")
 	SOTA          bool         `json:"sota"`          // Optional: is this a SOTA cluster? (default false)
-	ChannelBuffer int          `json:"channelBuffer"` // Optional: channel buffer size (default 8)
+	ChannelBuffer int          `json:"channelBuffer"` // Optional: channel buffer size (default 32)
 }
 
 // RedisConfig holds configuration for the optional Redis cache.
@@ -122,7 +122,7 @@ type Config struct {
 	ClubLogAPIURL     string
 	FallbackGitHubURL string
 	// Default channel buffer for DX cluster clients (overridable per-cluster config)
-	DXCChannelBuffer int `env:"DXC_CHANNEL_BUFFER" envDefault:"8"`
+	DXCChannelBuffer int `env:"DXC_CHANNEL_BUFFER" envDefault:"32"`
 }
 
 // LoadConfig loads configuration from environment variables.
