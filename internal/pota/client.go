@@ -390,9 +390,6 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 		cleanCallsign := func(call string) string {
 			call = strings.TrimSpace(call)
 			// Remove common POTA system suffixes that aren't part of the actual callsign
-			if idx := strings.Index(call, "#"); idx != -1 {
-				call = call[:idx]
-			}
 			if idx := strings.Index(call, "-#"); idx != -1 {
 				call = call[:idx]
 			}
