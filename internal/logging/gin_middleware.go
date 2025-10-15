@@ -20,10 +20,10 @@ func GinLogger() gin.HandlerFunc {
 
 		// Calculate latency
 		latency := time.Since(start)
-		
+
 		// Get status code
 		statusCode := c.Writer.Status()
-		
+
 		// Build the query string if present
 		if raw != "" {
 			path = path + "?" + raw
@@ -39,11 +39,11 @@ func GinLogger() gin.HandlerFunc {
 		)
 
 		if statusCode >= 500 {
-			Error(msg)
+			Error("%s", msg)
 		} else if statusCode >= 400 {
-			Warn(msg)
+			Warn("%s", msg)
 		} else {
-			Debug(msg) // HTTP requests are debug level
+			Debug("%s", msg) // HTTP requests are debug level
 		}
 	}
 }
