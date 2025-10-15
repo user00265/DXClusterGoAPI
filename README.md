@@ -43,7 +43,7 @@ Make the last N spots from DX clusters accessible via JSON API without needing a
    ```yaml
    environment:
      CALLSIGN: "YOUR_CALLSIGN" # Required
-     CLUSTERS: '[{"host":"dxfun.com","port":"8000"},  { "host": "cluster.sota.org.uk", "port": "7300", "sota": true }]'
+     CLUSTERS: '[{"host":"dxfun.com","port":"8000"},{"host":"cluster.sota.org.uk","port":"7300","sota":true}]'
    ```
 
    Each cluster config supports: `host`, `port`, `call` (defaults to `CALLSIGN`), `loginPrompt`, `sota` flag (true/false), and `channelBuffer`.
