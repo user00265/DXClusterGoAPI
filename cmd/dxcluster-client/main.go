@@ -154,11 +154,11 @@ func RunApplication(ctx context.Context, args []string) int {
 	if len(cfg.Clusters) > 0 {
 		logging.Notice("DX Clusters configured: %d", len(cfg.Clusters))
 		for i, cluster := range cfg.Clusters {
-			sotaFlag := "no"
+			sotaFlag := "false"
 			if cluster.SOTA {
-				sotaFlag = "yes"
+				sotaFlag = "true"
 			}
-			logging.Notice("  Cluster %d: %s:%s callsign=%s sota=%s", i+1, cluster.Host, cluster.Port.String(), cluster.Callsign, sotaFlag)
+			logging.Notice("  Cluster %d: %s port=%s callsign=%s sota=%s", i+1, cluster.Host, cluster.Port.String(), cluster.Callsign, sotaFlag)
 		}
 	} else {
 		logging.Warn("No DX Clusters configured.")
