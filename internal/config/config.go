@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/caarlos0/env/v11"
@@ -36,14 +37,41 @@ var (
 	POTAAPIEndpoint = "https://api.pota.app/spot/activator"
 )
 
+// FlexiblePort is a type that can unmarshal both string and integer port values from JSON
+type FlexiblePort string
+
+// UnmarshalJSON implements custom JSON unmarshaling for FlexiblePort
+func (fp *FlexiblePort) UnmarshalJSON(data []byte) error {
+	// Try to unmarshal as string first
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*fp = FlexiblePort(s)
+		return nil
+	}
+
+	// Try to unmarshal as integer
+	var i int
+	if err := json.Unmarshal(data, &i); err == nil {
+		*fp = FlexiblePort(strconv.Itoa(i))
+		return nil
+	}
+
+	return fmt.Errorf("port must be either a string or integer")
+}
+
+// String returns the port as a string
+func (fp FlexiblePort) String() string {
+	return string(fp)
+}
+
 // ClusterConfig holds connection details for a single DX cluster.
 type ClusterConfig struct {
-	Host          string `json:"host"`          // Required: hostname or IP
-	Port          string `json:"port"`          // Required: port number
-	Callsign      string `json:"call"`          // Optional: callsign (uses global CALLSIGN if not set)
-	LoginPrompt   string `json:"loginPrompt"`   // Optional: login prompt to expect (default "login:")
-	SOTA          bool   `json:"sota"`          // Optional: is this a SOTA cluster? (default false)
-	ChannelBuffer int    `json:"channelBuffer"` // Optional: channel buffer size (default 8)
+	Host          string       `json:"host"`          // Required: hostname or IP
+	Port          FlexiblePort `json:"port"`          // Required: port number (string or int)
+	Callsign      string       `json:"call"`          // Optional: callsign (uses global CALLSIGN if not set)
+	LoginPrompt   string       `json:"loginPrompt"`   // Optional: login prompt to expect (default "login:")
+	SOTA          bool         `json:"sota"`          // Optional: is this a SOTA cluster? (default false)
+	ChannelBuffer int          `json:"channelBuffer"` // Optional: channel buffer size (default 8)
 }
 
 // RedisConfig holds configuration for the optional Redis cache.
@@ -68,7 +96,8 @@ type Config struct {
 
 	// DX Cluster(s) Configuration
 	// CLUSTERS env var contains JSON array of cluster configs
-	// Example: CLUSTERS='[{"host":"dx.n9jr.com","port":"7300","call":"MYCALL"},{"host":"cluster.sota.org.uk","port":"7300","sota":true}]'
+	// Example: CLUSTERS='[{"host":"dx.n9jr.com","port":"7300","call":"MYCALL"},{"host":"cluster.sota.org.uk","port":7300,"sota":true}]'
+	// Note: Port can be either string ("7300") or integer (7300)
 	RawClustersJSON string          `env:"CLUSTERS"`
 	Clusters        []ClusterConfig `env:"-"` // Will be populated from RawClustersJSON
 

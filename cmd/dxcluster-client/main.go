@@ -158,7 +158,7 @@ func RunApplication(ctx context.Context, args []string) int {
 			if cluster.SOTA {
 				sotaFlag = "yes"
 			}
-			logging.Notice("  Cluster %d: %s:%s callsign=%s sota=%s", i+1, cluster.Host, cluster.Port, cluster.Callsign, sotaFlag)
+			logging.Notice("  Cluster %d: %s:%s callsign=%s sota=%s", i+1, cluster.Host, cluster.Port.String(), cluster.Callsign, sotaFlag)
 		}
 	} else {
 		logging.Warn("No DX Clusters configured.")
@@ -311,14 +311,14 @@ func RunApplication(ctx context.Context, args []string) int {
 	for _, cc := range cfg.Clusters {
 		client, err := cluster.NewClient(cc)
 		if err != nil {
-			logging.Warn("Failed to create DX Cluster client for %s:%s: %v. Skipping this cluster.", cc.Host, cc.Port, err)
+			logging.Warn("Failed to create DX Cluster client for %s:%s: %v. Skipping this cluster.", cc.Host, cc.Port.String(), err)
 			continue
 		}
 		dxClusterClients = append(dxClusterClients, client)
 		dxClusterHosts = append(dxClusterHosts, cc.Host)
 		// DON'T call Connect() yet - we'll do that after HTTP API is ready
 		buf := cap(client.SpotChan)
-		logging.Info("DX Cluster client for %s:%s created. channel_buffer=%d", cc.Host, cc.Port, buf)
+		logging.Info("DX Cluster client for %s:%s created. channel_buffer=%d", cc.Host, cc.Port.String(), buf)
 	}
 	if len(dxClusterClients) == 0 && !cfg.EnablePOTA {
 		logging.Error("No active DX Cluster connections and POTA is disabled. Exiting as there are no spot sources.")
@@ -372,7 +372,7 @@ func RunApplication(ctx context.Context, args []string) int {
 
 	for i, client := range dxClusterClients {
 		client.Connect(ctx) // Start connection and reconnection loop
-		logging.Info("DX Cluster client %s:%s connecting...", dxClusterHosts[i], cfg.Clusters[i].Port)
+		logging.Info("DX Cluster client %s:%s connecting...", dxClusterHosts[i], cfg.Clusters[i].Port.String())
 	}
 
 	// --- 8. Spot Aggregation & Enrichment ---

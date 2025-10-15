@@ -76,13 +76,13 @@ type Client struct {
 // NewClient creates and returns a new DXCluster client for a single connection.
 func NewClient(cfg config.ClusterConfig) (*Client, error) {
 	if cfg.Callsign == "" {
-		return nil, fmt.Errorf("callsign must be specified for DX cluster %s:%s", cfg.Host, cfg.Port)
+		return nil, fmt.Errorf("callsign must be specified for DX cluster %s:%s", cfg.Host, cfg.Port.String())
 	}
 	if cfg.Host == "" {
 		return nil, fmt.Errorf("host must be specified for DX cluster")
 	}
-	if cfg.Port == "" {
-		cfg.Port = config.DefaultDXCPort
+	if cfg.Port.String() == "" {
+		cfg.Port = config.FlexiblePort(config.DefaultDXCPort)
 	}
 	if cfg.LoginPrompt == "" {
 		cfg.LoginPrompt = defaultLoginPrompt
@@ -206,7 +206,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	addr := net.JoinHostPort(c.cfg.Host, c.cfg.Port)
+	addr := net.JoinHostPort(c.cfg.Host, c.cfg.Port.String())
 	logging.Info("Attempting to connect to DX cluster %s...", addr)
 
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second) // Connection timeout
@@ -397,7 +397,7 @@ func (c *Client) readLoop(ctx context.Context) {
 		// Respect cancellation quickly by checking context before attempting a read.
 		select {
 		case <-ctx.Done():
-			logging.Info("Read loop for %s cancelled by context.", net.JoinHostPort(c.cfg.Host, c.cfg.Port))
+			logging.Info("Read loop for %s cancelled by context.", net.JoinHostPort(c.cfg.Host, c.cfg.Port.String()))
 			return
 		default:
 		}
@@ -428,24 +428,24 @@ func (c *Client) readLoop(ctx context.Context) {
 				continue
 			}
 			if err == io.EOF {
-				logging.Info("Reader for %s exited gracefully (EOF).", net.JoinHostPort(c.cfg.Host, c.cfg.Port))
+				logging.Info("Reader for %s exited gracefully (EOF).", net.JoinHostPort(c.cfg.Host, c.cfg.Port.String()))
 				return
 			}
-			c.safeSendError(fmt.Errorf("error reading from DX cluster %s: %w", net.JoinHostPort(c.cfg.Host, c.cfg.Port), err))
+			c.safeSendError(fmt.Errorf("error reading from DX cluster %s: %w", net.JoinHostPort(c.cfg.Host, c.cfg.Port.String()), err))
 			return
 		}
 
 		line = strings.TrimRight(line, "\r\n")
 		// Strip ASCII bell characters that some clusters send
 		line = strings.ReplaceAll(line, "\a", "")
-		logging.Debug("DX cluster raw line received from %s: %q", net.JoinHostPort(c.cfg.Host, c.cfg.Port), line)
+		logging.Debug("DX cluster raw line received from %s: %q", net.JoinHostPort(c.cfg.Host, c.cfg.Port.String()), line)
 
 		if awaitingLogin && strings.Contains(line, c.cfg.LoginPrompt) {
 			if err := c.write(ctx, c.cfg.Callsign); err != nil {
 				c.safeSendError(fmt.Errorf("error sending callsign to %s: %w", c.cfg.Host, err))
 				return // Exit readLoop, trigger reconnection
 			}
-			logging.Debug("Sent callsign to %s.", net.JoinHostPort(c.cfg.Host, c.cfg.Port))
+			logging.Debug("Sent callsign to %s.", net.JoinHostPort(c.cfg.Host, c.cfg.Port.String()))
 			awaitingLogin = false
 			continue
 		}
