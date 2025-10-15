@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -103,6 +104,9 @@ func RunApplication(ctx context.Context, args []string) int {
 	}
 
 	logging.Notice("Starting %s %s (+%s)", version.ProjectName, version.ProjectVersion, version.ProjectGitHubURL)
+
+	// Track startup time for uptime calculations
+	startupTime := time.Now()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -255,14 +259,14 @@ func RunApplication(ctx context.Context, args []string) int {
 		logging.Notice("DXCC data downloaded and loaded successfully.")
 	} else {
 		logging.Notice("DXCC data is up to date (last updated: %s)", lastDXCCUpdate.Format(time.RFC3339))
-		// Load in-memory maps from database NOW to ensure they're ready before spots arrive
+		// Load in-memory maps from database to check if they're populated
 		if err := dxccClient.LoadMapsFromDB(ctx); err != nil {
 			log.Fatalf("FATAL: Failed to load DXCC maps from database: %v\n", err)
 		}
 		// Verify maps are actually populated (database might be empty despite recent update timestamp)
 		if len(dxccClient.PrefixesMap) == 0 {
 			logging.Warn("DXCC database is empty despite recent update timestamp. Forcing download now...")
-			dxccClient.FetchAndStoreData(ctx)
+			dxccClient.FetchAndStoreData(ctx) // This will reload maps, so no need to call LoadMapsFromDB again
 			logging.Notice("DXCC data downloaded and loaded successfully after empty database detection.")
 		}
 	}
@@ -585,6 +589,95 @@ func RunApplication(ctx context.Context, args []string) int {
 		logging.Info("POTA polling started (deferred).")
 	}
 
+	// --- Hourly Status Reporter ---
+	go func() {
+		// Helper function to generate status report
+		generateStatusReport := func() {
+			// Calculate uptime
+			uptime := time.Since(startupTime)
+			uptimeStr := fmt.Sprintf("%dh%dm", int(uptime.Hours()), int(uptime.Minutes())%60)
+
+			// Get memory usage
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			memoryMB := m.Alloc / 1024 / 1024
+
+			// Count spots by source
+			spots := centralSpotCache.GetAllSpots()
+			sourceCounts := make(map[string]int)
+			for _, s := range spots {
+				source := strings.ToLower(s.Source)
+				sourceCounts[source]++
+			}
+
+			// Build source counts string - always show enabled services even if 0
+			var sourceStats []string
+
+			// Always show SOTA count if any cluster has SOTA enabled
+			sotaEnabled := false
+			for _, cluster := range cfg.Clusters {
+				if cluster.SOTA {
+					sotaEnabled = true
+					break
+				}
+			}
+			if sotaEnabled {
+				count := sourceCounts["sota"] // will be 0 if not found
+				sourceStats = append(sourceStats, fmt.Sprintf("sota=%d", count))
+			}
+
+			// Always show POTA count if POTA client is enabled
+			if potaClient != nil {
+				count := sourceCounts["pota"] // will be 0 if not found
+				sourceStats = append(sourceStats, fmt.Sprintf("pota=%d", count))
+			}
+
+			// Only show cluster count if there are non-SOTA clusters configured
+			nonSotaClustersExist := false
+			for _, cluster := range cfg.Clusters {
+				if !cluster.SOTA {
+					nonSotaClustersExist = true
+					break
+				}
+			}
+			if nonSotaClustersExist {
+				clusterCount := 0
+				for source, count := range sourceCounts {
+					if source != "sota" && source != "pota" {
+						clusterCount += count
+					}
+				}
+				sourceStats = append(sourceStats, fmt.Sprintf("cluster=%d", clusterCount))
+			}
+
+			sourceStatsStr := strings.Join(sourceStats, ", ")
+			logging.Notice("DXClusterGoAPI up %s using %dMB of memory. Spots processed: %s", uptimeStr, memoryMB, sourceStatsStr)
+		}
+
+		// First report after 1 minute
+		firstTimer := time.NewTimer(1 * time.Minute)
+		select {
+		case <-firstTimer.C:
+			generateStatusReport()
+		case <-ctx.Done():
+			firstTimer.Stop()
+			return
+		}
+
+		// Then hourly reports
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				generateStatusReport()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// --- 9. Graceful Shutdown ---
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -722,11 +815,19 @@ func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Clien
 		c.JSON(http.StatusOK, spots)
 	})
 
-	// GET /spot/:qrg - Retrieve the latest spot for a given frequency (QRG in MHz).
+	// GET /spot/:qrg - Retrieve the latest spot for a given frequency (QRG in kHz).
 	r.GET("/spot/:qrg", func(c *gin.Context) {
 		qrgParam := c.Param("qrg")
-		qrg, err := strconv.ParseFloat(qrgParam, 64) // Frequency is in MHz
-		if err != nil {
+
+		// Try to parse as integer first (kHz), then as float (MHz)
+		var qrgMHz float64
+		if qrgInt, err := strconv.Atoi(qrgParam); err == nil {
+			// Integer input - treat as kHz, convert to MHz
+			qrgMHz = float64(qrgInt) / 1000.0
+		} else if qrgFloat, err := strconv.ParseFloat(qrgParam, 64); err == nil {
+			// Float input - treat as MHz (legacy support)
+			qrgMHz = qrgFloat
+		} else {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid frequency format"})
 			return
 		}
@@ -736,10 +837,9 @@ func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Clien
 		var youngestTime time.Time
 
 		for i := range spots {
-			// Compare frequencies with a small tolerance if needed, or exact match for now
-			// Given spots are float64, exact match is often problematic.
-			// However, the Node.js used `qrg*1 === single.frequency`, implying exact match.
-			if spots[i].Frequency == qrg {
+			// Compare frequencies with a small tolerance for floating point precision
+			// Spots are stored in MHz, so we compare against the converted value
+			if math.Abs(spots[i].Frequency-qrgMHz) < 0.001 {
 				if latestSpot == nil || spots[i].When.After(youngestTime) {
 					latestSpot = &spots[i]
 					youngestTime = spots[i].When
@@ -757,9 +857,18 @@ func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Clien
 	// GET /spots/:band - Retrieve all cached spots for a given band.
 	r.GET("/spots/:band", func(c *gin.Context) {
 		bandParam := strings.ToLower(c.Param("band"))
+
+		// Normalize band parameter - accept both "20m" and "20"
+		normalizedBand := bandParam
+		if bandInt, err := strconv.Atoi(bandParam); err == nil {
+			// If it's a number, add "m" suffix for meters
+			normalizedBand = fmt.Sprintf("%dm", bandInt)
+		}
+		// For centimeter bands like "70cm", "33cm", user must specify full name
+
 		filteredSpots := make([]spot.Spot, 0)
 		for _, s := range cache.GetAllSpots() {
-			if strings.ToLower(s.Band) == bandParam {
+			if strings.ToLower(s.Band) == normalizedBand {
 				filteredSpots = append(filteredSpots, s)
 			}
 		}
@@ -824,13 +933,32 @@ func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Clien
 		c.JSON(http.StatusOK, filteredSpots)
 	})
 
-	// GET /spots/dxcc/:dxcc - Retrieve all cached spots for a given DXCC entity name.
+	// GET /spots/dxcc/:dxcc - Retrieve all cached spots for a given DXCC entity ID or continent.
 	r.GET("/spots/dxcc/:dxcc", func(c *gin.Context) {
-		dxccNameParam := strings.ToLower(c.Param("dxcc")) // Match against entity name (e.g., "Italy")
+		dxccParam := c.Param("dxcc")
+
+		// Try to parse as DXCC ID number first
+		dxccID, err := strconv.Atoi(dxccParam)
+		var isNumeric bool = (err == nil)
+
+		// If not numeric, treat as continent abbreviation (convert to uppercase)
+		continent := strings.ToUpper(dxccParam)
+
 		filteredSpots := make([]spot.Spot, 0)
 		for _, s := range cache.GetAllSpots() {
-			if (s.SpottedInfo.DXCC != nil && strings.ToLower(s.SpottedInfo.DXCC.Entity) == dxccNameParam) ||
-				(s.SpotterInfo.DXCC != nil && strings.ToLower(s.SpotterInfo.DXCC.Entity) == dxccNameParam) {
+			var matches bool = false
+
+			if isNumeric {
+				// Match by DXCC ID
+				matches = (s.SpottedInfo.DXCC != nil && s.SpottedInfo.DXCC.DXCCID == dxccID) ||
+					(s.SpotterInfo.DXCC != nil && s.SpotterInfo.DXCC.DXCCID == dxccID)
+			} else {
+				// Match by continent abbreviation
+				matches = (s.SpottedInfo.DXCC != nil && s.SpottedInfo.DXCC.Cont == continent) ||
+					(s.SpotterInfo.DXCC != nil && s.SpotterInfo.DXCC.Cont == continent)
+			}
+
+			if matches {
 				filteredSpots = append(filteredSpots, s)
 			}
 		}
@@ -838,9 +966,7 @@ func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Clien
 			return filteredSpots[i].When.After(filteredSpots[j].When)
 		})
 		c.JSON(http.StatusOK, filteredSpots)
-	})
-
-	// GET /stats - Retrieve statistics about the cached spots.
+	}) // GET /stats - Retrieve statistics about the cached spots.
 	r.GET("/stats", func(c *gin.Context) {
 		spots := cache.GetAllSpots()
 		stats := gin.H{

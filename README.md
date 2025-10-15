@@ -62,13 +62,14 @@ API available at `http://x.x.x.x:8192`
 All endpoints return JSON. Base URL: `http://x.x.x.x:8192`
 
 - `GET /spots` - All cached spots
-- `GET /spot/14.250` - Latest spot at frequency (MHz)
-- `GET /spots/20m` - Spots on 20 meters
-- `GET /spots/source/pota` - Spots from POTA only
-- `GET /spots/callsign/W1AW` - All spots involving W1AW
-- `GET /spotter/K7RA` - Spots where K7RA is the spotter
-- `GET /spotted/K7RA` - Spots where K7RA is spotted
-- `GET /spots/dxcc/United%20States` - Spots from/to US stations
+- `GET /spot/14250` - Latest spot at frequency (kHz preferred, also accepts MHz decimals)
+- `GET /spots/20m` - Spots on 20 meters (accepts "20m", "20", "40m", "40", etc.
+- `GET /spots/source/pota` - Spots from POTA only (options: `cluster`, `sota`, `pota`)
+- `GET /spots/callsign/N0CALL` - All spots involving N0CALL
+- `GET /spotter/N0CALL` - Spots where N0CALL is the spotter
+- `GET /spotted/W1AW` - Spots where W1AW is spotted
+- `GET /spots/dxcc/291` - Spots from/to DXCC entity (use DXCC ID number or continent: NA, EU, AS, AF, OC, SA)
+- `GET /spots/dxcc/EU` - All spots from/to European stations
 - `GET /stats` - Cache statistics
 
 ### Example Output
@@ -78,7 +79,7 @@ All endpoints return JSON. Base URL: `http://x.x.x.x:8192`
   {
     "spotter": "W1AW",
     "spotted": "K7RA",
-    "frequency": 14.25,
+    "frequency": 14250000,
     "message": "CQ DX",
     "when": "2025-01-01T10:00:00Z",
     "source": "dx.n9jr.com",

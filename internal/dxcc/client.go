@@ -226,10 +226,7 @@ func NewClient(ctx context.Context, cfg config.Config, dbClient db.DBClient) (*C
 	client.updateStop = nil
 	client.updateDone = nil
 
-	// Load initial data into memory maps (can be empty if first run)
-	if err := client.loadMapsFromDB(ctx); err != nil {
-		logging.Warn("Failed to load initial DXCC data into memory: %v (will attempt update)", err)
-	}
+	// Initial data loading is handled by main.go based on update status
 
 	// scheduling handled by StartUpdater
 

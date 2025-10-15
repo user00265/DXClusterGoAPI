@@ -362,7 +362,7 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 		logging.Error("Failed to unmarshal POTA API response: %v", err)
 		return
 	}
-	logging.Notice("Fetching POTA spots from %s: received %d spots", config.POTAAPIEndpoint, len(rawSpots))
+	logging.Info("Received %d spots from %s", len(rawSpots), config.POTAAPIEndpoint)
 
 	for _, item := range rawSpots {
 		// Parse frequency from string to float64

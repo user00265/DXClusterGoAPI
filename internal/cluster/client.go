@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"os"
 	"regexp"
@@ -596,9 +597,9 @@ func (c *Client) safeSendSpot(sp Spot) {
 }
 
 // startInitialHeartbeatTest sends the first PING after receiving the first spot
-// and waits 30 seconds for PONG. If successful, starts regular heartbeat.
+// and waits 5 seconds for PONG. If successful, starts regular heartbeat.
 func (c *Client) startInitialHeartbeatTest(ctx context.Context) {
-	logging.Info("Starting initial heartbeat test for %s:%s (30 second timeout)", c.cfg.Host, c.cfg.Port)
+	logging.Info("Starting initial heartbeat test for %s:%s (5 second timeout)", c.cfg.Host, c.cfg.Port)
 
 	// Send initial PING
 	if err := c.write(ctx, "PING"); err != nil {
@@ -613,8 +614,8 @@ func (c *Client) startInitialHeartbeatTest(ctx context.Context) {
 
 	logging.Debug("Sent initial PING to %s:%s - waiting for PONG", c.cfg.Host, c.cfg.Port)
 
-	// Wait 30 seconds for PONG response
-	timeout := time.NewTimer(30 * time.Second)
+	// Wait 5 seconds for PONG response
+	timeout := time.NewTimer(5 * time.Second)
 	defer timeout.Stop()
 
 	ticker := time.NewTicker(100 * time.Millisecond) // Check every 100ms
@@ -626,7 +627,7 @@ func (c *Client) startInitialHeartbeatTest(ctx context.Context) {
 			logging.Debug("Initial heartbeat test cancelled for %s:%s", c.cfg.Host, c.cfg.Port)
 			return
 		case <-timeout.C:
-			logging.Warn("Initial heartbeat test failed for %s:%s - no PONG received within 30 seconds, heartbeat disabled", c.cfg.Host, c.cfg.Port)
+			logging.Warn("Initial heartbeat test failed for %s:%s - no PONG received within 5 seconds, heartbeat disabled", c.cfg.Host, c.cfg.Port)
 			return
 		case <-ticker.C:
 			c.statusMutex.RLock()
@@ -643,7 +644,7 @@ func (c *Client) startInitialHeartbeatTest(ctx context.Context) {
 }
 
 // startRegularHeartbeat begins the regular PING/PONG heartbeat mechanism.
-// Sends PING every 10-15 minutes to keep the connection alive.
+// Sends PING every 10-15 minutes (randomized) to keep the connection alive.
 func (c *Client) startRegularHeartbeat(ctx context.Context) {
 	c.statusMutex.Lock()
 	defer c.statusMutex.Unlock()
@@ -652,12 +653,21 @@ func (c *Client) startRegularHeartbeat(ctx context.Context) {
 		c.pingTicker.Stop() // Stop any existing ticker
 	}
 
-	// Set ping interval between 10-15 minutes (we'll use 12 minutes)
-	pingInterval := 12 * time.Minute
-	c.pingTicker = time.NewTicker(pingInterval)
 	c.heartbeatActive = true
 
-	logging.Info("Starting regular heartbeat for %s:%s (interval: %v)", c.cfg.Host, c.cfg.Port, pingInterval)
+	// Helper function to get random interval between 10-15 minutes
+	getRandomInterval := func() time.Duration {
+		// Random duration between 10-15 minutes (600-900 seconds)
+		minSeconds := 600
+		maxSeconds := 900
+		randomSeconds := minSeconds + rand.Intn(maxSeconds-minSeconds+1)
+		return time.Duration(randomSeconds) * time.Second
+	}
+
+	initialInterval := getRandomInterval()
+	c.pingTicker = time.NewTicker(initialInterval)
+
+	logging.Info("Starting regular heartbeat for %s:%s (initial interval: %v)", c.cfg.Host, c.cfg.Port, initialInterval)
 
 	go func() {
 		defer func() {
@@ -686,6 +696,16 @@ func (c *Client) startRegularHeartbeat(ctx context.Context) {
 				} else {
 					logging.Debug("Sent PING #%d to %s:%s", pingNum, c.cfg.Host, c.cfg.Port)
 				}
+
+				// Reset ticker with new random interval for next PING
+				c.statusMutex.Lock()
+				if c.pingTicker != nil {
+					c.pingTicker.Stop()
+					newInterval := getRandomInterval()
+					c.pingTicker = time.NewTicker(newInterval)
+					logging.Debug("Next heartbeat for %s:%s in %v", c.cfg.Host, c.cfg.Port, newInterval)
+				}
+				c.statusMutex.Unlock()
 			}
 		}
 	}()

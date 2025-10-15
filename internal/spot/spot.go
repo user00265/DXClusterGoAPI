@@ -82,10 +82,11 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 
 	// Build the output structure - match original field order
 	// Original: spotter, spotted, frequency, message, when, source, dxcc_spotter, dxcc_spotted, band
+	// Frequency is converted from MHz to Hz (integer)
 	output := struct {
 		Spotter     string    `json:"spotter"`
 		Spotted     string    `json:"spotted"`
-		Frequency   float64   `json:"frequency"`
+		Frequency   int       `json:"frequency"` // In Hz (converted from MHz)
 		Message     string    `json:"message"`
 		When        time.Time `json:"when"`
 		Source      string    `json:"source,omitempty"`
@@ -97,7 +98,7 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 	}{
 		Spotter:     s.Spotter,
 		Spotted:     s.Spotted,
-		Frequency:   s.Frequency,
+		Frequency:   int(s.Frequency * 1000000), // Convert MHz to Hz
 		Message:     s.Message,
 		When:        s.When,
 		Source:      s.Source,
