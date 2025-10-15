@@ -1,6 +1,8 @@
 package spot
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/user00265/dxclustergoapi/internal/dxcc"
@@ -33,6 +35,75 @@ type Spot struct {
 		PotaRef  string `json:"pota_ref,omitempty"`
 		PotaMode string `json:"pota_mode,omitempty"`
 	} `json:"additional_data,omitempty"`
+}
+
+// MarshalJSON customizes the JSON output to match the expected API format
+func (s Spot) MarshalJSON() ([]byte, error) {
+	// Helper to build the flattened DXCC+LoTW object
+	type FlatInfo struct {
+		Cont     string      `json:"cont,omitempty"`
+		Entity   string      `json:"entity,omitempty"`
+		Flag     string      `json:"flag,omitempty"`
+		DXCCID   interface{} `json:"dxcc_id,omitempty"` // string in output
+		LoTWUser interface{} `json:"lotw_user"`         // "2" or false
+		Lat      interface{} `json:"lat,omitempty"`     // string in output
+		Lng      interface{} `json:"lng,omitempty"`     // string in output
+	}
+
+	buildFlatInfo := func(info Info) *FlatInfo {
+		flat := &FlatInfo{}
+		if info.DXCC != nil {
+			flat.Cont = info.DXCC.Cont
+			flat.Entity = info.DXCC.Entity
+			flat.Flag = info.DXCC.Flag
+			// Convert numbers to strings to match expected format
+			if info.DXCC.DXCCID != 0 {
+				flat.DXCCID = fmt.Sprintf("%d", info.DXCC.DXCCID)
+			}
+			if info.DXCC.Latitude != 0 {
+				flat.Lat = fmt.Sprintf("%.1f", info.DXCC.Latitude)
+			}
+			if info.DXCC.Longitude != 0 {
+				flat.Lng = fmt.Sprintf("%.1f", info.DXCC.Longitude)
+			}
+		}
+		// LoTW user: "2" if user, false if not
+		if info.IsLoTWUser && info.LoTW != nil {
+			flat.LoTWUser = "2" // Indicates LoTW user with upload
+		} else {
+			flat.LoTWUser = false
+		}
+		return flat
+	}
+
+	// Build the output structure - simple keys first, then objects
+	output := struct {
+		Spotter     string    `json:"spotter"`
+		Spotted     string    `json:"spotted"`
+		Frequency   float64   `json:"frequency"`
+		Band        string    `json:"band"`
+		Message     string    `json:"message"`
+		When        time.Time `json:"when"`
+		Source      string    `json:"source,omitempty"`    // Extra: helpful for debugging
+		PotaRef     string    `json:"pota_ref,omitempty"`  // Extra: POTA reference (only for POTA spots)
+		PotaMode    string    `json:"pota_mode,omitempty"` // Extra: POTA mode (only for POTA spots)
+		DXCCSpotter *FlatInfo `json:"dxcc_spotter,omitempty"`
+		DXCCSpotted *FlatInfo `json:"dxcc_spotted,omitempty"`
+	}{
+		Spotter:     s.Spotter,
+		Spotted:     s.Spotted,
+		Frequency:   s.Frequency,
+		Band:        s.Band,
+		Message:     s.Message,
+		When:        s.When,
+		Source:      s.Source,
+		PotaRef:     s.AdditionalData.PotaRef,
+		PotaMode:    s.AdditionalData.PotaMode,
+		DXCCSpotter: buildFlatInfo(s.SpotterInfo),
+		DXCCSpotted: buildFlatInfo(s.SpottedInfo),
+	}
+
+	return json.Marshal(output)
 }
 
 // BandFromName converts a frequency to a ham radio band string.
