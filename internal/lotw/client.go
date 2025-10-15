@@ -249,10 +249,10 @@ func (c *Client) StopUpdater() {
 
 // fetchAndStoreUsers downloads the CSV, parses it, and replaces data in the database.
 func (c *Client) fetchAndStoreUsers(ctx context.Context) error {
-	logging.Info("[%s] Fetching LoTW CSV from %s", time.Now().Format(time.RFC3339), config.LoTWActivityURL)
+	logging.Info("Fetching LoTW CSV from %s", config.LoTWActivityURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", config.LoTWActivityURL, nil)
 	if err != nil {
-		logging.Info("[%s] ERROR: Failed to create HTTP request for LoTW CSV: %v", time.Now().Format(time.RFC3339), err)
+		logging.Error("Failed to create HTTP request for LoTW CSV: %v", err)
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("User-Agent", version.UserAgent)
@@ -266,41 +266,41 @@ func (c *Client) fetchAndStoreUsers(ctx context.Context) error {
 		resp, doErr = c.httpClient.Do(req)
 	}
 	if doErr != nil {
-		logging.Error("[%s] HTTP request to LoTW CSV failed: %v", time.Now().Format(time.RFC3339), doErr)
+		logging.Error("HTTP request to LoTW CSV failed: %v", doErr)
 		return fmt.Errorf("failed to fetch LoTW CSV: %w", doErr)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		logging.Error("[%s] LoTW CSV download returned non-OK status: %s", time.Now().Format(time.RFC3339), resp.Status)
+		logging.Error("LoTW CSV download returned non-OK status: %s", resp.Status)
 		return fmt.Errorf("non-OK status: %s", resp.Status)
 	}
 
 	// Read the response body to get file size for metadata tracking
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logging.Error("[%s] Failed to read LoTW CSV response: %v", time.Now().Format(time.RFC3339), err)
+		logging.Error("Failed to read LoTW CSV response: %v", err)
 		return fmt.Errorf("failed to read LoTW CSV: %w", err)
 	}
 
 	parsedUsers, err := parseLoTWCSV(strings.NewReader(string(data)))
 	if err != nil {
-		logging.Error("[%s] Failed to parse LoTW CSV: %v", time.Now().Format(time.RFC3339), err)
+		logging.Error("Failed to parse LoTW CSV: %v", err)
 		return fmt.Errorf("failed to parse LoTW CSV: %w", err)
 	}
-	logging.Info("[%s] Parsed %d LoTW user entries.", time.Now().Format(time.RFC3339), len(parsedUsers))
+	logging.Info("Parsed %d LoTW user entries.", len(parsedUsers))
 
 	if err := c.replaceUsersInDB(parsedUsers); err != nil {
-		logging.Error("[%s] Failed to store LoTW users in DB: %v", time.Now().Format(time.RFC3339), err)
+		logging.Error("Failed to store LoTW users in DB: %v", err)
 		return fmt.Errorf("failed to store LoTW users: %w", err)
 	}
 
 	// Record the successful download
 	if err := c.updateLastDownloadTime(ctx, config.LoTWActivityURL, len(data)); err != nil {
-		logging.Warn("[%s] Failed to update LoTW download metadata: %v", time.Now().Format(time.RFC3339), err)
+		logging.Warn("Failed to update LoTW download metadata: %v", err)
 	}
 
-	logging.Info("[%s] LoTW user activity update completed.", time.Now().Format(time.RFC3339))
+	logging.Info("LoTW user activity update completed.")
 	return nil
 }
 

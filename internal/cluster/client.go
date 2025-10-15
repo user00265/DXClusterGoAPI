@@ -206,14 +206,14 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	addr := net.JoinHostPort(c.cfg.Host, c.cfg.Port)
-	logging.Info("[%s] Attempting to connect to DX cluster %s...", time.Now().Format(time.RFC3339), addr)
+	logging.Info("Attempting to connect to DX cluster %s...", addr)
 
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second) // Connection timeout
 	if err != nil {
 		return fmt.Errorf("failed to connect to %s: %w", addr, err)
 	}
 	c.conn = conn
-	logging.Info("[%s] Connected to DX cluster %s.", time.Now().Format(time.RFC3339), addr)
+	logging.Info("Connected to DX cluster %s.", addr)
 
 	c.statusMutex.Lock()
 	c.isConnected = true
@@ -241,7 +241,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		c.conn = nil
 	}
 	c.statusMutex.Unlock()
-	logging.Info("[%s] Connection to DX cluster %s closed.", time.Now().Format(time.RFC3339), addr)
+	logging.Info("Connection to DX cluster %s closed.", addr)
 
 	// Determine if readLoop exited due to error or graceful shutdown
 	select {
@@ -396,7 +396,7 @@ func (c *Client) readLoop(ctx context.Context) {
 		// Respect cancellation quickly by checking context before attempting a read.
 		select {
 		case <-ctx.Done():
-			logging.Info("[%s] Read loop for %s cancelled by context.", time.Now().Format(time.RFC3339), net.JoinHostPort(c.cfg.Host, c.cfg.Port))
+			logging.Info("Read loop for %s cancelled by context.", net.JoinHostPort(c.cfg.Host, c.cfg.Port))
 			return
 		default:
 		}
@@ -427,7 +427,7 @@ func (c *Client) readLoop(ctx context.Context) {
 				continue
 			}
 			if err == io.EOF {
-				logging.Info("[%s] Reader for %s exited gracefully (EOF).", time.Now().Format(time.RFC3339), net.JoinHostPort(c.cfg.Host, c.cfg.Port))
+				logging.Info("Reader for %s exited gracefully (EOF).", net.JoinHostPort(c.cfg.Host, c.cfg.Port))
 				return
 			}
 			c.safeSendError(fmt.Errorf("error reading from DX cluster %s: %w", net.JoinHostPort(c.cfg.Host, c.cfg.Port), err))
@@ -444,7 +444,7 @@ func (c *Client) readLoop(ctx context.Context) {
 				c.safeSendError(fmt.Errorf("error sending callsign to %s: %w", c.cfg.Host, err))
 				return // Exit readLoop, trigger reconnection
 			}
-			logging.Debug("[%s] Sent callsign to %s.", time.Now().Format(time.RFC3339), net.JoinHostPort(c.cfg.Host, c.cfg.Port))
+			logging.Debug("Sent callsign to %s.", net.JoinHostPort(c.cfg.Host, c.cfg.Port))
 			awaitingLogin = false
 			continue
 		}
@@ -489,17 +489,6 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 		spotted := m[4]
 		freqStr := m[3]
 		message := m[5]
-
-		// Some cluster lines omit an explicit message and place a single token
-		// (e.g., "FIRST") where the message would be. In those cases the
-		// regex captures that token as the 'spotted' group and leaves message
-		// empty. Tests expect that token to be used as the message. If the
-		// message capture is empty, shift the spotted token into message and
-		// clear spotted.
-		if strings.TrimSpace(message) == "" && strings.TrimSpace(spotted) != "" {
-			message = spotted
-			spotted = ""
-		}
 
 		frequency, err := ParseFrequency(freqStr)
 		if err != nil {

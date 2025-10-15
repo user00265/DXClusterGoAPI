@@ -332,38 +332,38 @@ func (c *Client) StopPolling() {
 
 // fetchAndProcessSpots fetches, parses, and caches POTA spots.
 func (c *Client) fetchAndProcessSpots(ctx context.Context) {
-	logging.Info("[%s] Fetching POTA spots from %s", time.Now().Format(time.RFC3339), config.POTAAPIEndpoint)
+	logging.Info("Fetching POTA spots from %s", config.POTAAPIEndpoint)
 	req, err := http.NewRequestWithContext(ctx, "GET", config.POTAAPIEndpoint, nil)
 	if err != nil {
-		logging.Error("[%s] Failed to create HTTP request for POTA API: %v", time.Now().Format(time.RFC3339), err)
+		logging.Error("Failed to create HTTP request for POTA API: %v", err)
 		return
 	}
 	req.Header.Set("User-Agent", version.UserAgent)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		logging.Error("[%s] HTTP request to POTA API failed: %v", time.Now().Format(time.RFC3339), err)
+		logging.Error("HTTP request to POTA API failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		logging.Error("[%s] POTA API returned non-OK status: %s", time.Now().Format(time.RFC3339), resp.Status)
+		logging.Error("POTA API returned non-OK status: %s", resp.Status)
 		return
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logging.Error("[%s] Failed to read POTA response body: %v", time.Now().Format(time.RFC3339), err)
+		logging.Error("Failed to read POTA response body: %v", err)
 		return
 	}
 
 	var rawSpots []PotaRawSpot
 	if err := json.Unmarshal(body, &rawSpots); err != nil {
-		logging.Error("[%s] Failed to unmarshal POTA API response: %v", time.Now().Format(time.RFC3339), err)
+		logging.Error("Failed to unmarshal POTA API response: %v", err)
 		return
 	}
-	logging.Debug("[%s] Received %d raw POTA spots.", time.Now().Format(time.RFC3339), len(rawSpots))
+	logging.Debug("Received %d raw POTA spots.", len(rawSpots))
 
 	for _, item := range rawSpots {
 		// Parse frequency from string to float64
@@ -415,7 +415,7 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 		logging.Debug("POTA received raw spot: activator=%s spotter=%s freq=%.1f mode=%s ref=%s", item.Activator, item.Spotter, freq, item.Mode, item.Reference)
 		isNewSpot, err := c.cacher.IsSpotInCache(ctx, potaSpot, item.Mode)
 		if err != nil {
-			logging.Error("[%s] Failed to check POTA spot cache: %v", time.Now().Format(time.RFC3339), err)
+			logging.Error("Failed to check POTA spot cache: %v", err)
 			continue
 		}
 
@@ -436,11 +436,11 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 			// Send package-local POTA Spot type so tests and consumers receive the expected type
 			c.SpotChan <- potaSpot
 			if err := c.cacher.AddSpotToCache(ctx, potaSpot, item.Mode); err != nil {
-				logging.Error("[%s] Failed to add POTA spot to cache: %v", time.Now().Format(time.RFC3339), err)
+				logging.Error("Failed to add POTA spot to cache: %v", err)
 			}
 		}
 	}
-	logging.Debug("[%s] POTA spot processing complete.", time.Now().Format(time.RFC3339))
+	logging.Debug("POTA spot processing complete.")
 }
 
 // getAllowedDeviation determines the allowed frequency deviation based on mode.

@@ -84,17 +84,21 @@ func RunApplication(ctx context.Context, args []string) int {
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		lvl := strings.ToLower(strings.TrimSpace(v))
 		switch lvl {
-		case "error", "err", "e", "0":
+		case "crit", "critical", "c", "0":
+			logging.SetLevel(logging.LevelCrit)
+		case "error", "err", "e", "1":
 			logging.SetLevel(logging.LevelError)
-		case "warn", "warning", "w", "1":
+		case "warn", "warning", "w", "2":
 			logging.SetLevel(logging.LevelWarn)
-		case "info", "i", "2":
+		case "notice", "n", "3":
+			logging.SetLevel(logging.LevelNotice)
+		case "info", "i", "4":
 			logging.SetLevel(logging.LevelInfo)
-		case "debug", "d", "3":
+		case "debug", "d", "5":
 			logging.SetLevel(logging.LevelDebug)
 		default:
 			// Unknown value; emit a warning via leveled logger and keep default
-			logging.Warn("Unrecognized LOG_LEVEL=%q; valid: error,warn,info,debug or 0-3. Using default.", v)
+			logging.Warn("Unrecognized LOG_LEVEL=%q; valid: crit,error,warn,notice,info,debug or 0-5. Using default (NOTICE).", v)
 		}
 	}
 
@@ -147,7 +151,11 @@ func RunApplication(ctx context.Context, args []string) int {
 	if len(cfg.Clusters) > 0 {
 		logging.Info("DX Clusters configured: %d", len(cfg.Clusters))
 		for i, cluster := range cfg.Clusters {
-			logging.Info("  Cluster %d: %s:%s callsign=%s", i+1, cluster.Host, cluster.Port, cluster.Callsign)
+			sotaFlag := "no"
+			if cluster.SOTA {
+				sotaFlag = "yes"
+			}
+			logging.Info("  Cluster %d: %s:%s callsign=%s sota=%s", i+1, cluster.Host, cluster.Port, cluster.Callsign, sotaFlag)
 		}
 	} else {
 		logging.Warn("No DX Clusters configured.")
@@ -317,8 +325,12 @@ func RunApplication(ctx context.Context, args []string) int {
 	// --- 7. Create Spot Cache and Set up HTTP API BEFORE connecting spot sources ---
 	centralSpotCache := newSpotCache(cfg.MaxCache)
 
-	router := gin.Default()
-	router.SetTrustedProxies(nil) // To prevent "x-forwarded-for" issues if not behind a proxy
+	// Create Gin router with our custom logging (not gin.Default())
+	gin.SetMode(gin.ReleaseMode) // Suppress gin's startup messages
+	router := gin.New()
+	router.Use(logging.GinRecovery()) // Our recovery middleware
+	router.Use(logging.GinLogger())   // Our logging middleware
+	router.SetTrustedProxies(nil)     // To prevent "x-forwarded-for" issues if not behind a proxy
 
 	// Middleware to handle BaseURL prefix if configured
 	if cfg.BaseURL != "/" && cfg.BaseURL != "" {

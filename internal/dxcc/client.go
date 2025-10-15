@@ -582,7 +582,7 @@ func (c *Client) StartUpdater(ctx context.Context) {
 
 // fetchAndStoreData downloads the cty.xml.gz, parses it, and replaces data in the database.
 func (c *Client) fetchAndStoreData(ctx context.Context) {
-	logging.Info("[%s] Fetching DXCC data...", time.Now().Format(time.RFC3339))
+	logging.Info("Fetching DXCC data...")
 	var (
 		data      []byte
 		err       error
@@ -623,7 +623,7 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 		}
 	}
 	if err != nil {
-		logging.Warn("[%s] Club Log download failed after retries: %v. Falling back to GitHub URL.", time.Now().Format(time.RFC3339), err)
+		logging.Warn("Club Log download failed after retries: %v. Falling back to GitHub URL.", err)
 		// Fallback to GitHub
 		// Use Config override for fallback if present
 		fallback := config.FallbackGitHubURL
@@ -649,10 +649,10 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 			}
 		}
 		if err != nil {
-			logging.Error("[%s] Both Club Log and GitHub DXCC downloads failed after retries: %v", time.Now().Format(time.RFC3339), err)
+			logging.Error("Both Club Log and GitHub DXCC downloads failed after retries: %v", err)
 			return
 		}
-		logging.Info("[%s] Successfully downloaded DXCC data from GitHub fallback.", time.Now().Format(time.RFC3339))
+		logging.Info("Successfully downloaded DXCC data from GitHub fallback.")
 		// Debug: show a small diagnostic about the fetched payload to help tests
 		gz := false
 		if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
@@ -666,35 +666,35 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 				head = string(data)
 			}
 		}
-		logging.Debug("[%s] DXCC fallback download diagnostics: bytes=%d gzipped=%t head=%q", time.Now().Format(time.RFC3339), len(data), gz, head)
+		logging.Debug("DXCC fallback download diagnostics: bytes=%d gzipped=%t head=%q", len(data), gz, head)
 	} else {
-		logging.Info("[%s] Successfully downloaded DXCC data from Club Log.", time.Now().Format(time.RFC3339))
+		logging.Info("Successfully downloaded DXCC data from Club Log.")
 	}
 
 	xmlData, err := c.decompressAndParseXML(data)
 	if err != nil {
-		logging.Error("[%s] Failed to decompress/parse DXCC XML: %v", time.Now().Format(time.RFC3339), err)
+		logging.Error("Failed to decompress/parse DXCC XML: %v", err)
 		return
 	}
 
 	if err := c.replaceDataInDB(ctx, xmlData); err != nil {
-		logging.Error("[%s] Failed to store DXCC data in DB: %v", time.Now().Format(time.RFC3339), err)
+		logging.Error("Failed to store DXCC data in DB: %v", err)
 	} else {
-		logging.Info("[%s] DXCC data update completed. Reloading in-memory maps.", time.Now().Format(time.RFC3339))
+		logging.Info("DXCC data update completed. Reloading in-memory maps.")
 
 		// Force a WAL checkpoint to ensure data is flushed to disk immediately
 		if _, err := c.dbClient.GetDB().ExecContext(ctx, "PRAGMA wal_checkpoint(FULL);"); err != nil {
-			logging.Warn("[%s] Failed to checkpoint WAL after DXCC update: %v", time.Now().Format(time.RFC3339), err)
+			logging.Warn("Failed to checkpoint WAL after DXCC update: %v", err)
 		}
 
 		// Record the successful download
 		if err := c.updateLastDownloadTime(ctx, sourceURL, len(data)); err != nil {
-			logging.Warn("[%s] Failed to update DXCC download metadata: %v", time.Now().Format(time.RFC3339), err)
+			logging.Warn("Failed to update DXCC download metadata: %v", err)
 		}
 
 		// Reload in-memory maps after DB update
 		if err := c.loadMapsFromDB(ctx); err != nil {
-			logging.Error("[%s] Failed to reload DXCC maps after update: %v", time.Now().Format(time.RFC3339), err)
+			logging.Error("Failed to reload DXCC maps after update: %v", err)
 		}
 	}
 }
