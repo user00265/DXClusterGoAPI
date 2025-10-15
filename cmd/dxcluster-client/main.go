@@ -102,8 +102,8 @@ func RunApplication(ctx context.Context, args []string) int {
 		}
 	}
 
-	logging.Info("Starting %s v%s (+%s)", version.ProjectName, version.ProjectVersion, version.ProjectGitHubURL)
-	logging.Info("User-Agent: %s", version.UserAgent)
+	logging.Notice("Starting %s v%s (+%s)", version.ProjectName, version.ProjectVersion, version.ProjectGitHubURL)
+	logging.Notice("User-Agent: %s", version.UserAgent)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -142,31 +142,31 @@ func RunApplication(ctx context.Context, args []string) int {
 	}
 
 	// LOG_LEVEL was applied earlier so subsequent logs respect the selected level.
-	logging.Info("Configuration loaded. WebPort: %d, MaxCache: %d, DataDir: %s", cfg.WebPort, cfg.MaxCache, cfg.DataDir)
+	logging.Notice("Configuration loaded. WebPort: %d, MaxCache: %d, DataDir: %s", cfg.WebPort, cfg.MaxCache, cfg.DataDir)
 
 	// Debug configuration details
 	logging.Debug("CLUSTERS JSON: '%s'", cfg.RawClustersJSON)
 	logging.Debug("Global Callsign: '%s'", cfg.Callsign)
 
 	if len(cfg.Clusters) > 0 {
-		logging.Info("DX Clusters configured: %d", len(cfg.Clusters))
+		logging.Notice("DX Clusters configured: %d", len(cfg.Clusters))
 		for i, cluster := range cfg.Clusters {
 			sotaFlag := "no"
 			if cluster.SOTA {
 				sotaFlag = "yes"
 			}
-			logging.Info("  Cluster %d: %s:%s callsign=%s sota=%s", i+1, cluster.Host, cluster.Port, cluster.Callsign, sotaFlag)
+			logging.Notice("  Cluster %d: %s:%s callsign=%s sota=%s", i+1, cluster.Host, cluster.Port, cluster.Callsign, sotaFlag)
 		}
 	} else {
 		logging.Warn("No DX Clusters configured.")
 	}
 	if cfg.EnablePOTA {
-		logging.Info("POTA integration enabled. Polling interval: %s", cfg.POTAPollInterval)
+		logging.Notice("POTA integration enabled. Polling interval: %s", cfg.POTAPollInterval)
 	} else {
 		logging.Info("POTA integration disabled.")
 	}
 	if cfg.Redis.Enabled {
-		logging.Info("Redis cache enabled. Host: %s:%s, DB: %d, TLS: %t", cfg.Redis.Host, cfg.Redis.Port, cfg.Redis.DB, cfg.Redis.UseTLS)
+		logging.Notice("Redis cache enabled. Host: %s:%s, DB: %d, TLS: %t", cfg.Redis.Host, cfg.Redis.Port, cfg.Redis.DB, cfg.Redis.UseTLS)
 	} else {
 		logging.Info("Redis cache disabled (using in-memory).")
 	}
@@ -191,7 +191,7 @@ func RunApplication(ctx context.Context, args []string) int {
 			log.Fatalf("FATAL: Failed to initialize Redis client: %v\n", err)
 		}
 		defer rdb.Close()
-		logging.Info("Redis client initialized and connected.")
+		logging.Notice("Redis client initialized and connected.")
 	}
 
 	// --- 3. Initialize LoTW Client ---
@@ -207,7 +207,7 @@ func RunApplication(ctx context.Context, args []string) int {
 	}
 
 	// Perform initial synchronous LoTW data check and download BEFORE starting spot sources
-	logging.Info("Checking LoTW data status...")
+	logging.Notice("Checking LoTW data status...")
 	lastLoTWUpdate, err := lotwClient.GetLastDownloadTime(ctx)
 	if err != nil {
 		logging.Warn("Failed to check LoTW last update time: %v", err)
@@ -244,7 +244,7 @@ func RunApplication(ctx context.Context, args []string) int {
 	}
 
 	// Perform initial synchronous DXCC data check and download BEFORE starting spot sources
-	logging.Info("Checking DXCC data status...")
+	logging.Notice("Checking DXCC data status...")
 	lastDXCCUpdate, err := dxccClient.GetLastDownloadTime(ctx)
 	if err != nil {
 		logging.Warn("Failed to check DXCC last update time: %v", err)
@@ -253,9 +253,9 @@ func RunApplication(ctx context.Context, args []string) int {
 	if needsDXCCUpdate {
 		logging.Info("DXCC data needs update, downloading now (this may take a moment)...")
 		dxccClient.FetchAndStoreData(ctx)
-		logging.Info("DXCC data downloaded and loaded successfully.")
+		logging.Notice("DXCC data downloaded and loaded successfully.")
 	} else {
-		logging.Info("DXCC data is up to date (last updated: %s)", lastDXCCUpdate.Format(time.RFC3339))
+		logging.Notice("DXCC data is up to date (last updated: %s)", lastDXCCUpdate.Format(time.RFC3339))
 		// Load in-memory maps from database NOW to ensure they're ready before spots arrive
 		if err := dxccClient.LoadMapsFromDB(ctx); err != nil {
 			log.Fatalf("FATAL: Failed to load DXCC maps from database: %v\n", err)
@@ -264,7 +264,7 @@ func RunApplication(ctx context.Context, args []string) int {
 		if len(dxccClient.PrefixesMap) == 0 {
 			logging.Warn("DXCC database is empty despite recent update timestamp. Forcing download now...")
 			dxccClient.FetchAndStoreData(ctx)
-			logging.Info("DXCC data downloaded and loaded successfully after empty database detection.")
+			logging.Notice("DXCC data downloaded and loaded successfully after empty database detection.")
 		}
 	}
 
@@ -425,7 +425,13 @@ func RunApplication(ctx context.Context, args []string) int {
 				select {
 				case err := <-c.ErrorChan:
 					if err != nil {
-						logging.Error("from DX Cluster: %v", err)
+						// Suppress "use of closed network connection" during graceful shutdown
+						// This is expected when Close() is called while read loop is active
+						if strings.Contains(err.Error(), "use of closed network connection") {
+							logging.Debug("DX Cluster connection closed (expected during shutdown): %v", err)
+						} else {
+							logging.Error("from DX Cluster: %v", err)
+						}
 					}
 				case msg := <-c.MessageChan:
 					_ = msg // Ignore generic messages for now
