@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -247,11 +248,24 @@ func (c *Client) Close() {
 
 // createTables creates the DXCC tables if they don't exist.
 func (c *Client) createTables() error {
-	// First, drop existing tables to ensure new schema
-	dropQueries := []string{
-		fmt.Sprintf("DROP TABLE IF EXISTS %s", prefixesTableName),
-		fmt.Sprintf("DROP TABLE IF EXISTS %s", exceptionsTableName),
-		fmt.Sprintf("DROP TABLE IF EXISTS %s", entitiesTableName),
+	// Only drop tables if DXCC_FORCE_REBUILD environment variable is set
+	// This prevents data loss on every restart while allowing schema updates when needed
+	forceRebuild := os.Getenv("DXCC_FORCE_REBUILD") == "true" || os.Getenv("DXCC_FORCE_REBUILD") == "1"
+
+	if forceRebuild {
+		logging.Warn("DXCC_FORCE_REBUILD is set - dropping existing tables to rebuild schema")
+		dropQueries := []string{
+			fmt.Sprintf("DROP TABLE IF EXISTS %s", prefixesTableName),
+			fmt.Sprintf("DROP TABLE IF EXISTS %s", exceptionsTableName),
+			fmt.Sprintf("DROP TABLE IF EXISTS %s", entitiesTableName),
+		}
+
+		db := c.dbClient.GetDB()
+		for _, query := range dropQueries {
+			if _, err := db.Exec(query); err != nil {
+				return fmt.Errorf("failed to drop table: %w\nQuery: %s", err, query)
+			}
+		}
 	}
 
 	queries := []string{
@@ -310,13 +324,6 @@ func (c *Client) createTables() error {
 	}
 
 	db := c.dbClient.GetDB()
-
-	// Drop existing tables first
-	for _, query := range dropQueries {
-		if _, err := db.Exec(query); err != nil {
-			return fmt.Errorf("failed to drop table: %w\nQuery: %s", err, query)
-		}
-	}
 
 	// Create new tables with updated schema
 	for _, query := range queries {
@@ -522,9 +529,9 @@ func (c *Client) loadMapsFromDB(ctx context.Context) error {
 	exceptionCount := len(c.exceptionsMap)
 	entityCount := len(c.entitiesMap)
 
-	// Only log at INFO level if we actually have data, otherwise use DEBUG
+	// Only log at NOTICE level if we actually have data, otherwise use DEBUG
 	if prefixCount > 0 || exceptionCount > 0 || entityCount > 0 {
-		logging.Info("DXCC data loaded: %d prefixes, %d exceptions, %d entities.", prefixCount, exceptionCount, entityCount)
+		logging.Notice("DXCC data loaded: %d prefixes, %d exceptions, %d entities.", prefixCount, exceptionCount, entityCount)
 	} else {
 		logging.Debug("DXCC data loaded: %d prefixes, %d exceptions, %d entities (empty - will check for updates).", prefixCount, exceptionCount, entityCount)
 	}
@@ -537,29 +544,13 @@ func (c *Client) loadMapsFromDB(ctx context.Context) error {
 }
 
 // StartUpdater starts the periodic update job for DXCC data.
+// Note: Does NOT perform an initial check - main.go handles that synchronously before calling this.
 func (c *Client) StartUpdater(ctx context.Context) {
 	if c.updateStop != nil {
 		return // already running
 	}
 	c.updateStop = make(chan struct{})
 	c.updateDone = make(chan struct{})
-
-	// Check if initial update is needed
-	go func() {
-		needsUpdate, err := c.needsUpdate(ctx)
-		if err != nil {
-			logging.Error("Failed to check if DXCC data needs update: %v", err)
-			// Fallback to update on error
-			needsUpdate = true
-		}
-
-		if needsUpdate {
-			logging.Info("DXCC data needs update, fetching...")
-			c.fetchAndStoreData(ctx)
-		} else {
-			logging.Info("DXCC data is up to date, skipping initial download")
-		}
-	}()
 
 	go func() {
 		ticker := time.NewTicker(c.cfg.DXCCUpdateInterval)
@@ -577,7 +568,7 @@ func (c *Client) StartUpdater(ctx context.Context) {
 			}
 		}
 	}()
-	logging.Info("DXCC updater started. Will check for updates every %s.", c.cfg.DXCCUpdateInterval)
+	logging.Notice("DXCC updater started. Will check for updates every %s.", c.cfg.DXCCUpdateInterval)
 }
 
 // fetchAndStoreData downloads the cty.xml.gz, parses it, and replaces data in the database.
@@ -652,7 +643,7 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 			logging.Error("Both Club Log and GitHub DXCC downloads failed after retries: %v", err)
 			return
 		}
-		logging.Info("Successfully downloaded DXCC data from GitHub fallback.")
+		logging.Notice("Successfully downloaded DXCC data from GitHub fallback.")
 		// Debug: show a small diagnostic about the fetched payload to help tests
 		gz := false
 		if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
@@ -668,7 +659,7 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 		}
 		logging.Debug("DXCC fallback download diagnostics: bytes=%d gzipped=%t head=%q", len(data), gz, head)
 	} else {
-		logging.Info("Successfully downloaded DXCC data from Club Log.")
+		logging.Notice("Successfully downloaded DXCC data from Club Log.")
 	}
 
 	xmlData, err := c.decompressAndParseXML(data)

@@ -213,7 +213,7 @@ func (c *Client) StartUpdater(ctx context.Context) {
 			logging.Info("LoTW data needs update, fetching...")
 			c.fetchAndStoreUsers(ctx)
 		} else {
-			logging.Info("LoTW data is up to date, skipping initial download")
+			logging.Notice("LoTW data is up to date, skipping initial download")
 		}
 	}()
 

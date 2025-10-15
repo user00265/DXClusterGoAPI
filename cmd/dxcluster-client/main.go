@@ -102,8 +102,7 @@ func RunApplication(ctx context.Context, args []string) int {
 		}
 	}
 
-	logging.Notice("Starting %s v%s (+%s)", version.ProjectName, version.ProjectVersion, version.ProjectGitHubURL)
-	logging.Notice("User-Agent: %s", version.UserAgent)
+	logging.Notice("Starting %s %s (+%s)", version.ProjectName, version.ProjectVersion, version.ProjectGitHubURL)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -281,7 +280,7 @@ func RunApplication(ctx context.Context, args []string) int {
 	// CRITICAL BARRIER: DXCC and LoTW data are now FULLY LOADED and ready.
 	// ═══════════════════════════════════════════════════════════════════════════
 	// Spots can now be enriched immediately upon arrival from any source.
-	logging.Info("DXCC and LoTW data loaded. Ready to initialize spot sources and HTTP API.")
+	logging.Notice("DXCC and LoTW data loaded. Ready to initialize spot sources and HTTP API.")
 
 	// --- 6. Initialize POTA Client (if enabled) ---
 	var potaClient *pota.Client

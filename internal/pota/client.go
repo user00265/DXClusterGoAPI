@@ -268,7 +268,7 @@ func NewClient(ctx context.Context, cfg config.Config, rdb *redisclient.Client) 
 	// Choose caching mechanism
 	if cfg.Redis.Enabled && rdb != nil {
 		client.cacher = NewRedisSpotCacher(rdb, cfg.Redis.SpotExpiry)
-		logging.Info("POTA client using Redis cache with expiry: %s", cfg.Redis.SpotExpiry)
+		logging.Notice("POTA client using Redis cache with expiry: %s", cfg.Redis.SpotExpiry)
 	} else {
 		client.cacher = NewInMemorySpotCacher(cfg.MaxCache) // Use MaxCache as a proxy for in-memory size
 		logging.Info("POTA client using in-memory cache (max %d spots).", cfg.MaxCache)
@@ -312,7 +312,7 @@ func (c *Client) StartPolling(ctx context.Context) {
 			}
 		}
 	}()
-	logging.Info("POTA polling started. Initial poll will run shortly, then every %s.", c.cfg.POTAPollInterval)
+	logging.Notice("POTA polling started. Initial poll will run shortly, then every %s.", c.cfg.POTAPollInterval)
 }
 
 // StopPolling halts the continuous polling.
@@ -332,7 +332,6 @@ func (c *Client) StopPolling() {
 
 // fetchAndProcessSpots fetches, parses, and caches POTA spots.
 func (c *Client) fetchAndProcessSpots(ctx context.Context) {
-	logging.Info("Fetching POTA spots from %s", config.POTAAPIEndpoint)
 	req, err := http.NewRequestWithContext(ctx, "GET", config.POTAAPIEndpoint, nil)
 	if err != nil {
 		logging.Error("Failed to create HTTP request for POTA API: %v", err)
@@ -363,7 +362,7 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 		logging.Error("Failed to unmarshal POTA API response: %v", err)
 		return
 	}
-	logging.Debug("Received %d raw POTA spots.", len(rawSpots))
+	logging.Notice("Fetching POTA spots from %s: received %d spots", config.POTAAPIEndpoint, len(rawSpots))
 
 	for _, item := range rawSpots {
 		// Parse frequency from string to float64
