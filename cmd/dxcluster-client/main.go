@@ -350,7 +350,7 @@ func RunApplication(ctx context.Context, args []string) int {
 	}
 
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.WebPort),
+		Addr:    fmt.Sprintf("0.0.0.0:%d", cfg.WebPort),
 		Handler: router,
 	}
 
@@ -360,7 +360,7 @@ func RunApplication(ctx context.Context, args []string) int {
 			log.Fatalf("FATAL: HTTP server failed: %v\n", err)
 		}
 	}()
-	logging.Info("HTTP API listening on :%d (BaseURL: %s)", cfg.WebPort, cfg.BaseURL)
+	logging.Info("HTTP API listening on 0.0.0.0:%d (BaseURL: %s)", cfg.WebPort, cfg.BaseURL)
 
 	// ═══════════════════════════════════════════════════════════════════════════
 	// NOW connect DX clusters and start POTA polling - everything is ready!
