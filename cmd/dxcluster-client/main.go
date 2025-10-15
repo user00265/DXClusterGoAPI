@@ -471,10 +471,12 @@ func RunApplication(ctx context.Context, args []string) int {
 		verbose := os.Getenv("DX_API_VERBOSE_SPOT_PIPELINE") == "1" || strings.ToLower(os.Getenv("DX_API_VERBOSE_SPOT_PIPELINE")) == "true"
 		spotCount := 0
 
-		// Duplicate detection: track spotter+spotted pairs with timestamp
+		// Duplicate detection: track spotter+spotted+band with timestamp
+		// (same station can be on multiple bands simultaneously)
 		type spotKey struct {
 			spotter string
 			spotted string
+			band    string
 		}
 		recentSpots := make(map[spotKey]time.Time)
 		const dedupeWindow = 30 * time.Second
@@ -500,10 +502,15 @@ func RunApplication(ctx context.Context, args []string) int {
 					continue
 				}
 
-				// Check for duplicate spot (same spotter+spotted within 30 seconds)
+				// Determine band from frequency for duplicate detection
+				// (same station can be on multiple bands simultaneously)
+				band := spot.BandFromName(receivedSpot.Frequency)
+
+				// Check for duplicate spot (same spotter+spotted+band within 30 seconds)
 				key := spotKey{
 					spotter: receivedSpot.Spotter,
 					spotted: receivedSpot.Spotted,
+					band:    band,
 				}
 				now := time.Now()
 
@@ -517,8 +524,8 @@ func RunApplication(ctx context.Context, args []string) int {
 				// Check if this is a duplicate
 				if lastSeen, exists := recentSpots[key]; exists {
 					if now.Sub(lastSeen) < dedupeWindow {
-						logging.Debug("DUPLICATE SPOT FILTERED: %s -> %s @ %.3f kHz [%s] (seen %.1f seconds ago)",
-							receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Source, now.Sub(lastSeen).Seconds())
+						logging.Debug("DUPLICATE SPOT FILTERED: %s -> %s @ %.3f kHz (%s) [%s] (seen %.1f seconds ago)",
+							receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, band, receivedSpot.Source, now.Sub(lastSeen).Seconds())
 						continue
 					}
 				}
@@ -621,18 +628,28 @@ func RunApplication(ctx context.Context, args []string) int {
 
 // enrichSpot enriches a raw spot with DXCC and LoTW information.
 func enrichSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwClient *lotw.Client) (spot.Spot, error) {
-	// Enrich Spotter Info
-	spotterDxcc, err := dxccClient.GetDxccInfo(ctx, s.Spotter, nil) // No historical lookup date
-	if err != nil {
-		logging.Warn("DXCC lookup failed for spotter %s: %v", s.Spotter, err)
+	// Known pseudo-callsigns used by automated systems (skip DXCC/LoTW lookups)
+	pseudoCallsigns := map[string]bool{
+		"RBNHOLE": true, // Reverse Beacon Network aggregated spots
+		"SOTAMAT": true, // SOTA automated spotting system
 	}
-	spotterLoTW, err := lotwClient.GetLoTWUserActivity(ctx, s.Spotter)
-	if err != nil {
-		logging.Warn("LoTW lookup failed for spotter %s: %v", s.Spotter, err)
+
+	// Enrich Spotter Info (skip if pseudo-callsign)
+	if !pseudoCallsigns[s.Spotter] {
+		spotterDxcc, err := dxccClient.GetDxccInfo(ctx, s.Spotter, nil) // No historical lookup date
+		if err != nil {
+			logging.Warn("DXCC lookup failed for spotter %s: %v", s.Spotter, err)
+		}
+		spotterLoTW, err := lotwClient.GetLoTWUserActivity(ctx, s.Spotter)
+		if err != nil {
+			logging.Warn("LoTW lookup failed for spotter %s: %v", s.Spotter, err)
+		}
+		s.SpotterInfo.DXCC = spotterDxcc
+		s.SpotterInfo.LoTW = spotterLoTW
+		s.SpotterInfo.IsLoTWUser = spotterLoTW != nil // Convenience field
+	} else {
+		logging.Debug("Skipping DXCC/LoTW lookup for pseudo-callsign spotter: %s", s.Spotter)
 	}
-	s.SpotterInfo.DXCC = spotterDxcc
-	s.SpotterInfo.LoTW = spotterLoTW
-	s.SpotterInfo.IsLoTWUser = spotterLoTW != nil // Convenience field
 
 	// Enrich Spotted Info
 	spottedDxcc, err := dxccClient.GetDxccInfo(ctx, s.Spotted, nil)
