@@ -48,6 +48,7 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 		LoTWUser interface{} `json:"lotw_user"`         // "2" or false
 		Lat      interface{} `json:"lat,omitempty"`     // string in output
 		Lng      interface{} `json:"lng,omitempty"`     // string in output
+		CQZ      interface{} `json:"cqz,omitempty"`     // string in output - CQ Zone
 	}
 
 	buildFlatInfo := func(info Info) *FlatInfo {
@@ -66,6 +67,9 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 			if info.DXCC.Longitude != 0 {
 				flat.Lng = fmt.Sprintf("%.1f", info.DXCC.Longitude)
 			}
+			if info.DXCC.CQZ != 0 {
+				flat.CQZ = fmt.Sprintf("%d", info.DXCC.CQZ)
+			}
 		}
 		// LoTW user: "2" if user, false if not
 		if info.IsLoTWUser && info.LoTW != nil {
@@ -76,31 +80,32 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 		return flat
 	}
 
-	// Build the output structure - simple keys first, then objects
+	// Build the output structure - match original field order
+	// Original: spotter, spotted, frequency, message, when, source, dxcc_spotter, dxcc_spotted, band
 	output := struct {
 		Spotter     string    `json:"spotter"`
 		Spotted     string    `json:"spotted"`
 		Frequency   float64   `json:"frequency"`
-		Band        string    `json:"band"`
 		Message     string    `json:"message"`
 		When        time.Time `json:"when"`
-		Source      string    `json:"source,omitempty"`    // Extra: helpful for debugging
-		PotaRef     string    `json:"pota_ref,omitempty"`  // Extra: POTA reference (only for POTA spots)
-		PotaMode    string    `json:"pota_mode,omitempty"` // Extra: POTA mode (only for POTA spots)
+		Source      string    `json:"source,omitempty"`
 		DXCCSpotter *FlatInfo `json:"dxcc_spotter,omitempty"`
 		DXCCSpotted *FlatInfo `json:"dxcc_spotted,omitempty"`
+		Band        string    `json:"band"`
+		PotaRef     string    `json:"pota_ref,omitempty"`  // Extra: only for POTA spots
+		PotaMode    string    `json:"pota_mode,omitempty"` // Extra: only for POTA spots
 	}{
 		Spotter:     s.Spotter,
 		Spotted:     s.Spotted,
 		Frequency:   s.Frequency,
-		Band:        s.Band,
 		Message:     s.Message,
 		When:        s.When,
 		Source:      s.Source,
-		PotaRef:     s.AdditionalData.PotaRef,
-		PotaMode:    s.AdditionalData.PotaMode,
 		DXCCSpotter: buildFlatInfo(s.SpotterInfo),
 		DXCCSpotted: buildFlatInfo(s.SpottedInfo),
+		Band:        s.Band,
+		PotaRef:     s.AdditionalData.PotaRef,
+		PotaMode:    s.AdditionalData.PotaMode,
 	}
 
 	return json.Marshal(output)
