@@ -386,9 +386,22 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 			spotTime = spotTime.UTC()
 		}
 
+		// cleanCallsign removes invalid characters and suffixes that interfere with DXCC lookup
+		cleanCallsign := func(call string) string {
+			call = strings.TrimSpace(call)
+			// Remove common POTA system suffixes that aren't part of the actual callsign
+			if idx := strings.Index(call, "#"); idx != -1 {
+				call = call[:idx]
+			}
+			if idx := strings.Index(call, "-#"); idx != -1 {
+				call = call[:idx]
+			}
+			return strings.TrimSpace(call)
+		}
+
 		// Validate required fields before creating spot
-		spotter := strings.TrimSpace(item.Spotter)
-		activator := strings.TrimSpace(item.Activator)
+		spotter := cleanCallsign(item.Spotter)
+		activator := cleanCallsign(item.Activator)
 		if spotter == "" || activator == "" {
 			logging.Warn("POTA spot rejected: missing spotter=%q or activator=%q ref=%s freq=%.1f", spotter, activator, item.Reference, freq)
 			continue // Skip this spot

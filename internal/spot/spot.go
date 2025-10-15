@@ -88,33 +88,30 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 		return flat
 	}
 
-	// Build the output structure - match original field order
-	// Original: spotter, spotted, frequency, message, when, source, dxcc_spotter, dxcc_spotted, band
-	// Frequency is converted from MHz to Hz (integer)
+	// Build the output structure - single variables first, then objects
+	// Single variables: spotter, spotted, frequency, band, message, when, source
+	// Objects: dxcc_spotter, dxcc_spotted (contain pota_ref and pota_mode)
+	// Frequency output is integer kHz (inputs can be string, int, or float)
 	output := struct {
 		Spotter     string    `json:"spotter"`
 		Spotted     string    `json:"spotted"`
-		Frequency   int       `json:"frequency"` // In Hz (converted from MHz)
+		Frequency   int       `json:"frequency"` // Integer kHz output (e.g., 14272)
+		Band        string    `json:"band"`
 		Message     string    `json:"message"`
 		When        time.Time `json:"when"`
 		Source      string    `json:"source,omitempty"`
 		DXCCSpotter *FlatInfo `json:"dxcc_spotter,omitempty"`
 		DXCCSpotted *FlatInfo `json:"dxcc_spotted,omitempty"`
-		Band        string    `json:"band"`
-		PotaRef     string    `json:"pota_ref,omitempty"`  // Extra: only for POTA spots
-		PotaMode    string    `json:"pota_mode,omitempty"` // Extra: only for POTA spots
 	}{
 		Spotter:     s.Spotter,
 		Spotted:     s.Spotted,
-		Frequency:   int(s.Frequency * 1000000), // Convert MHz to Hz
+		Frequency:   int(s.Frequency * 1000), // Convert MHz to kHz integer (14.272 MHz -> 14272)
+		Band:        s.Band,
 		Message:     s.Message,
 		When:        s.When,
 		Source:      s.Source,
 		DXCCSpotter: buildFlatInfo(s.SpotterInfo, s.AdditionalData),
 		DXCCSpotted: buildFlatInfo(s.SpottedInfo, s.AdditionalData),
-		Band:        s.Band,
-		PotaRef:     s.AdditionalData.PotaRef,
-		PotaMode:    s.AdditionalData.PotaMode,
 	}
 
 	return json.Marshal(output)

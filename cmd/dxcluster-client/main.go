@@ -736,6 +736,19 @@ func RunApplication(ctx context.Context, args []string) int {
 	return 0
 }
 
+// cleanCallsignForDXCC removes invalid characters and suffixes that interfere with DXCC lookup
+func cleanCallsignForDXCC(call string) string {
+	call = strings.TrimSpace(call)
+	// Remove common system suffixes that aren't part of the actual callsign
+	if idx := strings.Index(call, "#"); idx != -1 {
+		call = call[:idx]
+	}
+	if idx := strings.Index(call, "-#"); idx != -1 {
+		call = call[:idx]
+	}
+	return strings.TrimSpace(call)
+}
+
 // enrichSpot enriches a raw spot with DXCC and LoTW information.
 func enrichSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwClient *lotw.Client) (spot.Spot, error) {
 	// Known pseudo-callsigns used by automated systems (skip DXCC/LoTW lookups)
@@ -746,13 +759,14 @@ func enrichSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwC
 
 	// Enrich Spotter Info (skip if pseudo-callsign)
 	if !pseudoCallsigns[s.Spotter] {
-		spotterDxcc, err := dxccClient.GetDxccInfo(ctx, s.Spotter, nil) // No historical lookup date
+		cleanedSpotter := cleanCallsignForDXCC(s.Spotter)
+		spotterDxcc, err := dxccClient.GetDxccInfo(ctx, cleanedSpotter, nil) // No historical lookup date
 		if err != nil {
-			logging.Warn("DXCC lookup failed for spotter %s: %v", s.Spotter, err)
+			logging.Warn("DXCC lookup failed for spotter %s (cleaned: %s): %v", s.Spotter, cleanedSpotter, err)
 		}
-		spotterLoTW, err := lotwClient.GetLoTWUserActivity(ctx, s.Spotter)
+		spotterLoTW, err := lotwClient.GetLoTWUserActivity(ctx, cleanedSpotter)
 		if err != nil {
-			logging.Warn("LoTW lookup failed for spotter %s: %v", s.Spotter, err)
+			logging.Warn("LoTW lookup failed for spotter %s (cleaned: %s): %v", s.Spotter, cleanedSpotter, err)
 		}
 		s.SpotterInfo.DXCC = spotterDxcc
 		s.SpotterInfo.LoTW = spotterLoTW
@@ -762,13 +776,14 @@ func enrichSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwC
 	}
 
 	// Enrich Spotted Info
-	spottedDxcc, err := dxccClient.GetDxccInfo(ctx, s.Spotted, nil)
+	cleanedSpotted := cleanCallsignForDXCC(s.Spotted)
+	spottedDxcc, err := dxccClient.GetDxccInfo(ctx, cleanedSpotted, nil)
 	if err != nil {
-		logging.Warn("DXCC lookup failed for spotted %s: %v", s.Spotted, err)
+		logging.Warn("DXCC lookup failed for spotted %s (cleaned: %s): %v", s.Spotted, cleanedSpotted, err)
 	}
-	spottedLoTW, err := lotwClient.GetLoTWUserActivity(ctx, s.Spotted)
+	spottedLoTW, err := lotwClient.GetLoTWUserActivity(ctx, cleanedSpotted)
 	if err != nil {
-		logging.Warn("LoTW lookup failed for spotted %s: %v", s.Spotted, err)
+		logging.Warn("LoTW lookup failed for spotted %s (cleaned: %s): %v", s.Spotted, cleanedSpotted, err)
 	}
 	s.SpottedInfo.DXCC = spottedDxcc
 	s.SpottedInfo.LoTW = spottedLoTW
