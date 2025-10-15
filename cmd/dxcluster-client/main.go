@@ -815,17 +815,24 @@ func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Clien
 		c.JSON(http.StatusOK, spots)
 	})
 
-	// GET /spot/:qrg - Retrieve the latest spot for a given frequency (QRG in kHz).
+	// GET /spot/:qrg - Retrieve the latest spot for a given frequency (QRG).
+	// Supports: Hz (14250000), kHz (14250), MHz (14.250)
 	r.GET("/spot/:qrg", func(c *gin.Context) {
 		qrgParam := c.Param("qrg")
 
-		// Try to parse as integer first (kHz), then as float (MHz)
+		// Parse frequency input and normalize to MHz
 		var qrgMHz float64
 		if qrgInt, err := strconv.Atoi(qrgParam); err == nil {
-			// Integer input - treat as kHz, convert to MHz
-			qrgMHz = float64(qrgInt) / 1000.0
+			// Integer input - determine if Hz, kHz based on magnitude
+			if qrgInt >= 1000000 {
+				// Treat as Hz (e.g., 14250000 -> 14.250 MHz)
+				qrgMHz = float64(qrgInt) / 1000000.0
+			} else {
+				// Treat as kHz (e.g., 14250 -> 14.250 MHz)
+				qrgMHz = float64(qrgInt) / 1000.0
+			}
 		} else if qrgFloat, err := strconv.ParseFloat(qrgParam, 64); err == nil {
-			// Float input - treat as MHz (legacy support)
+			// Float input - treat as MHz (e.g., 14.250)
 			qrgMHz = qrgFloat
 		} else {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid frequency format"})
