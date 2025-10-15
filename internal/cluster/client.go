@@ -516,7 +516,12 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 			Frequency: frequency, // Frequency in kHz from cluster (matching original format)
 			Message:   strings.TrimSpace(message),
 			When:      time.Now().UTC(), // Use current UTC for spot reception time
-			Source:    c.cfg.Host,
+			Source: func() string {
+				if c.cfg.SOTA {
+					return "sota"
+				}
+				return "cluster"
+			}(),
 		}
 
 		// Detect band from frequency for logging
