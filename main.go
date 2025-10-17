@@ -563,6 +563,7 @@ func RunApplication(ctx context.Context, args []string) int {
 					break
 				}
 			}
+
 			if sotaEnabled {
 				count := sourceCounts["sota"] // will be 0 if not found
 				sourceStats = append(sourceStats, fmt.Sprintf("sota=%d", count))

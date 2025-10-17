@@ -1,6 +1,8 @@
 name: Snyk
 
 on:
+  workflow_dispatch:
+
   push:
     branches: [ master, main, develop ]
   pull_request:
