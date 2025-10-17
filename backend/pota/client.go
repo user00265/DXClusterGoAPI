@@ -13,11 +13,11 @@ import (
 	// using a simple ticker for polling instead of gocron to avoid API mismatches
 	"github.com/go-redis/redis/v8" // For Redis client operations (SETEX, GET)
 
-	"github.com/user00265/dxclustergoapi/internal/config"
-	"github.com/user00265/dxclustergoapi/internal/logging"
-	"github.com/user00265/dxclustergoapi/internal/redisclient"
-	"github.com/user00265/dxclustergoapi/internal/spot"
-	"github.com/user00265/dxclustergoapi/internal/utils"
+	"github.com/user00265/dxclustergoapi/config"
+	"github.com/user00265/dxclustergoapi/logging"
+	"github.com/user00265/dxclustergoapi/redisclient"
+	"github.com/user00265/dxclustergoapi/spot"
+	"github.com/user00265/dxclustergoapi/utils"
 	"github.com/user00265/dxclustergoapi/version" // For User-Agent
 )
 

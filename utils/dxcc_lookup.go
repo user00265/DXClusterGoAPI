@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/user00265/dxclustergoapi/internal/dxcc"
+	"github.com/user00265/dxclustergoapi/backend/dxcc"
 )
 
 // LookupDXCC performs DXCC entity lookup for a callsign.

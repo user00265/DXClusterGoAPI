@@ -8,67 +8,25 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	// Used for checking if Redis client is available
-	"github.com/user00265/dxclustergoapi/internal/cluster"
-	"github.com/user00265/dxclustergoapi/internal/config"
-	"github.com/user00265/dxclustergoapi/internal/db"
-	"github.com/user00265/dxclustergoapi/internal/dxcc"
-	"github.com/user00265/dxclustergoapi/internal/logging"
-	"github.com/user00265/dxclustergoapi/internal/lotw"
-	"github.com/user00265/dxclustergoapi/internal/pota"
-	"github.com/user00265/dxclustergoapi/internal/redisclient"
-	"github.com/user00265/dxclustergoapi/internal/spot"
-	"github.com/user00265/dxclustergoapi/internal/utils"
-	"github.com/user00265/dxclustergoapi/version" // For User-Agent string
+	"github.com/user00265/dxclustergoapi/backend/cluster"
+	"github.com/user00265/dxclustergoapi/backend/dxcc"
+	"github.com/user00265/dxclustergoapi/backend/lotw"
+	"github.com/user00265/dxclustergoapi/backend/pota"
+	"github.com/user00265/dxclustergoapi/config"
+	"github.com/user00265/dxclustergoapi/db"
+	"github.com/user00265/dxclustergoapi/frontend"
+	"github.com/user00265/dxclustergoapi/logging"
+	"github.com/user00265/dxclustergoapi/redisclient"
+	"github.com/user00265/dxclustergoapi/spot"
+	"github.com/user00265/dxclustergoapi/utils"
+	"github.com/user00265/dxclustergoapi/version"
 )
-
-// Global spot cache (in-memory, protected by mutex)
-// If Redis is enabled, this acts as the "source of truth" after aggregation,
-// and API queries will still filter this memory cache.
-// For persistence + direct Redis query, we'd need a different strategy.
-// For now, mirroring Node.js: in-memory is the primary API source,
-// Redis for POTA dedupe.
-type spotCache struct {
-	sync.RWMutex
-	spots   []spot.Spot
-	maxSize int
-}
-
-func newSpotCache(maxSize int) *spotCache {
-	return &spotCache{
-		spots:   make([]spot.Spot, 0, maxSize),
-		maxSize: maxSize,
-	}
-}
-
-func (c *spotCache) AddSpot(newSpot spot.Spot) {
-	c.Lock()
-	defer c.Unlock()
-
-	c.spots = append(c.spots, newSpot)
-
-	// Remove oldest spots if cache exceeds max size
-	if len(c.spots) > c.maxSize {
-		c.spots = c.spots[len(c.spots)-c.maxSize:]
-	}
-	// Note: The original Node.js also had a `reduce_spots` function for deduplication.
-	// We might need to port that logic here if simple size-based trimming isn't enough.
-}
-
-func (c *spotCache) GetAllSpots() []spot.Spot {
-	c.RLock()
-	defer c.RUnlock()
-	// Return a copy to prevent external modification
-	return append([]spot.Spot{}, c.spots...)
-}
 
 func main() {
 	// Call RunApplication with background context and os.Args (excluding program name)
@@ -326,7 +284,7 @@ func RunApplication(ctx context.Context, args []string) int {
 	}
 
 	// --- 7. Create Spot Cache and Set up HTTP API BEFORE connecting spot sources ---
-	centralSpotCache := newSpotCache(cfg.MaxCache)
+	centralSpotCache := frontend.NewCache()
 
 	// Create Gin router with our custom logging (not gin.Default())
 	gin.SetMode(gin.ReleaseMode) // Suppress gin's startup messages
@@ -345,12 +303,12 @@ func RunApplication(ctx context.Context, args []string) int {
 			c.Status(http.StatusOK)
 		})
 		apiGroup := router.Group(cfg.BaseURL)
-		setupAPIRoutes(apiGroup, centralSpotCache, dxccClient, lotwClient)
+		frontend.SetupRoutes(apiGroup, centralSpotCache, dxccClient, lotwClient)
 	} else {
 		router.GET("/healthz", func(c *gin.Context) {
 			c.Status(http.StatusOK)
 		})
-		setupAPIRoutes(router.Group("/"), centralSpotCache, dxccClient, lotwClient)
+		frontend.SetupRoutes(router.Group("/"), centralSpotCache, dxccClient, lotwClient)
 	}
 
 	srv := &http.Server{
@@ -501,15 +459,13 @@ func RunApplication(ctx context.Context, args []string) int {
 
 				// Validate required fields - reject spots with missing callsigns
 				if strings.TrimSpace(receivedSpot.Spotter) == "" {
-					logging.Warn("SPOT REJECTED: missing spotter callsign. spotted=%q freq=%.3f source=%s", receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Source)
+					logging.Warn("SPOT REJECTED: missing spotter callsign. spotted=%q freq=%s source=%s", receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), receivedSpot.Source)
 					continue
 				}
 				if strings.TrimSpace(receivedSpot.Spotted) == "" {
-					logging.Warn("SPOT REJECTED: missing spotted callsign. spotter=%q freq=%.3f source=%s", receivedSpot.Spotter, receivedSpot.Frequency, receivedSpot.Source)
+					logging.Warn("SPOT REJECTED: missing spotted callsign. spotter=%q freq=%s source=%s", receivedSpot.Spotter, utils.FormatFrequency(receivedSpot.Frequency), receivedSpot.Source)
 					continue
-				}
-
-				// Determine band from frequency for duplicate detection
+				} // Determine band from frequency for duplicate detection
 				// (same station can be on multiple bands simultaneously)
 				band := utils.BandFromFreq(receivedSpot.Frequency)
 
@@ -531,8 +487,8 @@ func RunApplication(ctx context.Context, args []string) int {
 				// Check if this is a duplicate
 				if lastSeen, exists := recentSpots[key]; exists {
 					if now.Sub(lastSeen) < dedupeWindow {
-						logging.Debug("DUPLICATE SPOT FILTERED: %s -> %s @ %.3f kHz (%s) [%s] (seen %.1f seconds ago)",
-							receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, band, receivedSpot.Source, now.Sub(lastSeen).Seconds())
+						logging.Debug("DUPLICATE SPOT FILTERED: %s -> %s @ %s (%s) [%s] (seen %.1f seconds ago)",
+							receivedSpot.Spotter, receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), band, receivedSpot.Source, now.Sub(lastSeen).Seconds())
 						continue
 					}
 				}
@@ -735,7 +691,7 @@ func cleanCallsignForDXCC(call string) string {
 	return strings.TrimSpace(call)
 }
 
-// enrichSpot enriches a raw spot with DXCC and LoTW information.
+// enhanceSpot enhances a raw spot with DXCC and LoTW information.
 func enhanceSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwClient *lotw.Client) (spot.Spot, error) {
 	// Known pseudo-callsigns used by automated systems (skip DXCC/LoTW lookups)
 	pseudoCallsigns := map[string]bool{
@@ -777,7 +733,7 @@ func enhanceSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotw
 
 	// Add Band information
 	s.Band = utils.BandFromFreq(s.Frequency)
-	logging.Debug("Band assignment: %.3f kHz -> %s", s.Frequency, s.Band)
+	logging.Debug("Band assignment: %s -> %s", utils.FormatFrequency(s.Frequency), s.Band)
 
 	return s, nil
 }
@@ -806,224 +762,4 @@ func mergeSpotChannels(channels ...<-chan spot.Spot) <-chan spot.Spot {
 		close(out)
 	}()
 	return out
-}
-
-// setupAPIRoutes configures all API endpoints.
-func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Client, lotwClient *lotw.Client) {
-	// GET /spots - Retrieve all cached spots.
-	r.GET("/spots", func(c *gin.Context) {
-		spots := cache.GetAllSpots()
-		c.JSON(http.StatusOK, spots)
-	})
-
-	// GET /spot/:qrg - Retrieve the latest spot for a given frequency (QRG).
-	// Supports: Hz (14250000), kHz (14250), MHz (14.250)
-	r.GET("/spot/:qrg", func(c *gin.Context) {
-		qrgParam := c.Param("qrg")
-
-		// Parse frequency input to Hz using utils
-		qrgHz, err := utils.ParseFrequency(qrgParam)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid frequency format: %v", err)})
-			return
-		}
-
-		// Use 3 kHz tolerance for frequency matching (in Hz, so 3000 Hz)
-		toleranceHz := int64(3000)
-
-		spots := cache.GetAllSpots()
-		var latestSpot *spot.Spot
-		var youngestTime time.Time
-
-		for i := range spots {
-			// Compare frequencies with tolerance (in Hz)
-			if utils.FrequencyDeviation(spots[i].Frequency, qrgHz, toleranceHz) {
-				if latestSpot == nil || spots[i].When.After(youngestTime) {
-					latestSpot = &spots[i]
-					youngestTime = spots[i].When
-				}
-			}
-		}
-
-		if latestSpot != nil {
-			c.JSON(http.StatusOK, latestSpot)
-		} else {
-			c.JSON(http.StatusNotFound, gin.H{"error": "No spot found for this frequency"})
-		}
-	})
-
-	// GET /spots/:band - Retrieve all cached spots for a given band.
-	r.GET("/spots/:band", func(c *gin.Context) {
-		bandParam := strings.ToLower(c.Param("band"))
-
-		// Normalize band parameter - accept both "20m" and "20"
-		normalizedBand := bandParam
-		if bandInt, err := strconv.Atoi(bandParam); err == nil {
-			// If it's a number, add "m" suffix for meters
-			normalizedBand = fmt.Sprintf("%dm", bandInt)
-		}
-		// For centimeter bands like "70cm", "33cm", user must specify full name
-
-		filteredSpots := make([]spot.Spot, 0)
-		for _, s := range cache.GetAllSpots() {
-			if strings.ToLower(s.Band) == normalizedBand {
-				filteredSpots = append(filteredSpots, s)
-			}
-		}
-		c.JSON(http.StatusOK, filteredSpots)
-	})
-
-	// GET /spots/source/:source - Retrieve all cached spots from a given source.
-	r.GET("/spots/source/:source", func(c *gin.Context) {
-		sourceParam := strings.ToLower(c.Param("source"))
-		filteredSpots := make([]spot.Spot, 0)
-		for _, s := range cache.GetAllSpots() {
-			if strings.ToLower(s.Source) == sourceParam {
-				filteredSpots = append(filteredSpots, s)
-			}
-		}
-		c.JSON(http.StatusOK, filteredSpots)
-	})
-
-	// GET /spots/callsign/:callsign - Retrieve all cached spots involving a given callsign (spotter or spotted).
-	r.GET("/spots/callsign/:callsign", func(c *gin.Context) {
-		callsignParam := strings.ToUpper(c.Param("callsign"))
-		filteredSpots := make([]spot.Spot, 0)
-		for _, s := range cache.GetAllSpots() {
-			if strings.ToUpper(s.Spotter) == callsignParam || strings.ToUpper(s.Spotted) == callsignParam {
-				filteredSpots = append(filteredSpots, s)
-			}
-		}
-		// Sort by 'When' descending (latest first)
-		sort.Slice(filteredSpots, func(i, j int) bool {
-			return filteredSpots[i].When.After(filteredSpots[j].When)
-		})
-		c.JSON(http.StatusOK, filteredSpots)
-	})
-
-	// GET /spotter/:callsign - Retrieve all cached spots where the given callsign is the spotter.
-	r.GET("/spotter/:callsign", func(c *gin.Context) {
-		callsignParam := strings.ToUpper(c.Param("callsign"))
-		filteredSpots := make([]spot.Spot, 0)
-		for _, s := range cache.GetAllSpots() {
-			if strings.ToUpper(s.Spotter) == callsignParam {
-				filteredSpots = append(filteredSpots, s)
-			}
-		}
-		sort.Slice(filteredSpots, func(i, j int) bool {
-			return filteredSpots[i].When.After(filteredSpots[j].When)
-		})
-		c.JSON(http.StatusOK, filteredSpots)
-	})
-
-	// GET /spotted/:callsign - Retrieve all cached spots where the given callsign is the spotted station.
-	r.GET("/spotted/:callsign", func(c *gin.Context) {
-		callsignParam := strings.ToUpper(c.Param("callsign"))
-		filteredSpots := make([]spot.Spot, 0)
-		for _, s := range cache.GetAllSpots() {
-			if strings.ToUpper(s.Spotted) == callsignParam {
-				filteredSpots = append(filteredSpots, s)
-			}
-		}
-		sort.Slice(filteredSpots, func(i, j int) bool {
-			return filteredSpots[i].When.After(filteredSpots[j].When)
-		})
-		c.JSON(http.StatusOK, filteredSpots)
-	})
-
-	// GET /spots/dxcc/:dxcc - Retrieve all cached spots for a given DXCC entity ID or continent.
-	r.GET("/spots/dxcc/:dxcc", func(c *gin.Context) {
-		dxccParam := c.Param("dxcc")
-
-		// Try to parse as DXCC ID number first
-		dxccID, err := strconv.Atoi(dxccParam)
-		var isNumeric bool = (err == nil)
-
-		// If not numeric, treat as continent abbreviation (convert to uppercase)
-		continent := strings.ToUpper(dxccParam)
-
-		filteredSpots := make([]spot.Spot, 0)
-		for _, s := range cache.GetAllSpots() {
-			var matches bool = false
-
-			if isNumeric {
-				// Match by DXCC ID
-				matches = (s.SpottedInfo.DXCC != nil && s.SpottedInfo.DXCC.DXCCID == dxccID) ||
-					(s.SpotterInfo.DXCC != nil && s.SpotterInfo.DXCC.DXCCID == dxccID)
-			} else {
-				// Match by continent abbreviation
-				matches = (s.SpottedInfo.DXCC != nil && s.SpottedInfo.DXCC.Cont == continent) ||
-					(s.SpotterInfo.DXCC != nil && s.SpotterInfo.DXCC.Cont == continent)
-			}
-
-			if matches {
-				filteredSpots = append(filteredSpots, s)
-			}
-		}
-		sort.Slice(filteredSpots, func(i, j int) bool {
-			return filteredSpots[i].When.After(filteredSpots[j].When)
-		})
-		c.JSON(http.StatusOK, filteredSpots)
-	}) // GET /stats - Retrieve statistics about the cached spots.
-	r.GET("/stats", func(c *gin.Context) {
-		spots := cache.GetAllSpots()
-		stats := gin.H{
-			"entries":  len(spots),
-			"cluster":  0,
-			"pota":     0,
-			"freshest": nil, // Will be ISO string or null
-			"oldest":   nil, // Will be ISO string or null
-		}
-
-		// Add DXCC and LoTW last update times
-		if dxccLastUpdate, err := dxccClient.GetLastDownloadTime(context.Background()); err == nil && !dxccLastUpdate.IsZero() {
-			stats["dxcc_last_updated"] = dxccLastUpdate.Format(time.RFC3339)
-		} else {
-			stats["dxcc_last_updated"] = nil
-		}
-
-		if lotwLastUpdate, err := lotwClient.GetLastDownloadTime(context.Background()); err == nil && !lotwLastUpdate.IsZero() {
-			stats["lotw_last_updated"] = lotwLastUpdate.Format(time.RFC3339)
-		} else {
-			stats["lotw_last_updated"] = nil
-		}
-
-		if len(spots) > 0 {
-			youngest := time.Time{}                              // Zero time
-			oldest := time.Now().Add(100 * 365 * 24 * time.Hour) // Far future
-
-			for i := range spots {
-				// Treat any non-pota source as a cluster-derived spot for stats
-				if strings.ToLower(spots[i].Source) == "pota" {
-					stats["pota"] = stats["pota"].(int) + 1
-				} else {
-					stats["cluster"] = stats["cluster"].(int) + 1
-				}
-
-				if spots[i].When.After(youngest) {
-					youngest = spots[i].When
-				}
-				if spots[i].When.Before(oldest) {
-					oldest = spots[i].When
-				}
-			}
-			stats["freshest"] = youngest.Format(time.RFC3339)
-			stats["oldest"] = oldest.Format(time.RFC3339)
-		}
-		c.JSON(http.StatusOK, stats)
-	})
-
-	// Test-only debug endpoint: reports per-source counts.
-	// This route is registered only when DX_API_TEST_DEBUG=1 is set so it
-	// remains unavailable in production by default.
-	if v := os.Getenv("DX_API_TEST_DEBUG"); v == "1" || strings.ToLower(v) == "true" {
-		r.GET("/debug", func(c *gin.Context) {
-			counts := make(map[string]int)
-			for _, s := range cache.GetAllSpots() {
-				src := strings.ToLower(s.Source)
-				counts[src]++
-			}
-			c.JSON(http.StatusOK, gin.H{"per_source": counts})
-		})
-	}
 }

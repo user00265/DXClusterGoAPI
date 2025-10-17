@@ -12,9 +12,9 @@ import (
 
 	// using ticker-based updates instead of gocron
 
-	"github.com/user00265/dxclustergoapi/internal/config"
-	"github.com/user00265/dxclustergoapi/internal/db"
-	"github.com/user00265/dxclustergoapi/internal/logging"
+	"github.com/user00265/dxclustergoapi/config"
+	"github.com/user00265/dxclustergoapi/db"
+	"github.com/user00265/dxclustergoapi/logging"
 	"github.com/user00265/dxclustergoapi/version" // For User-Agent
 )
 

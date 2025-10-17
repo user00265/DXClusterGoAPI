@@ -17,9 +17,9 @@ import (
 	backoff "github.com/cenkalti/backoff/v4"
 	"golang.org/x/net/context"
 
-	"github.com/user00265/dxclustergoapi/internal/config"
-	"github.com/user00265/dxclustergoapi/internal/logging"
-	"github.com/user00265/dxclustergoapi/internal/utils"
+	"github.com/user00265/dxclustergoapi/config"
+	"github.com/user00265/dxclustergoapi/logging"
+	"github.com/user00265/dxclustergoapi/utils"
 )
 
 const (
@@ -583,7 +583,7 @@ func (c *Client) safeSendMessage(msg string) {
 }
 
 func (c *Client) safeSendSpot(sp Spot) {
-	logging.Debug("DX cluster sending spot: %s -> %s @ %.1f kHz", sp.Spotter, sp.Spotted, sp.Frequency)
+	logging.Debug("DX cluster sending spot: %s -> %s @ %s", sp.Spotter, sp.Spotted, utils.FormatFrequency(sp.Frequency))
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Warn("Recovered from panic sending spot to closed SpotChan for %s: %v", c.cfg.Host, r)

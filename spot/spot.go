@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/user00265/dxclustergoapi/internal/dxcc"
-	"github.com/user00265/dxclustergoapi/internal/lotw"
+	"github.com/user00265/dxclustergoapi/backend/dxcc"
+	"github.com/user00265/dxclustergoapi/backend/lotw"
 )
 
 // Info represents the enriched DXCC and LoTW information for a callsign.

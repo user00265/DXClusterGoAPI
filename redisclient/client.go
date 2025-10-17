@@ -9,7 +9,7 @@ import (
 	"github.com/go-redis/redis/v8" // Using v8 as it's common in go.mod references
 	"golang.org/x/net/context"
 
-	"github.com/user00265/dxclustergoapi/internal/config"
+	"github.com/user00265/dxclustergoapi/config"
 )
 
 // Client holds the Redis client instance.

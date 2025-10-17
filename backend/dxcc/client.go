@@ -20,9 +20,9 @@ import (
 
 	// Using manual retry loops and ticker-based scheduling to avoid external API mismatches
 
-	"github.com/user00265/dxclustergoapi/internal/config"
-	"github.com/user00265/dxclustergoapi/internal/db"
-	"github.com/user00265/dxclustergoapi/internal/logging"
+	"github.com/user00265/dxclustergoapi/config"
+	"github.com/user00265/dxclustergoapi/db"
+	"github.com/user00265/dxclustergoapi/logging"
 	"github.com/user00265/dxclustergoapi/version" // For User-Agent
 )
 
