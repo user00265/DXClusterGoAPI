@@ -21,9 +21,9 @@ COPY . .
 # Build the main application binary
 # -ldflags to embed version info into the binary
 # Output binary to /dxcluster-go-api for easy copying in the next stage
-RUN CGO_ENABLED=0 go build -ldflags "-X 'github.com/user00265/dxclustergoapi/internal/version.BuildVersion=${BUILD_VERSION}' \
-                      -X 'github.com/user00265/dxclustergoapi/internal/version.GitCommit=${GIT_COMMIT}'" \
-                      -o /dxcluster-go-api ./cmd/dxcluster-client
+RUN CGO_ENABLED=0 go build -ldflags "-X 'github.com/user00265/dxclustergoapi/version.BuildVersion=${BUILD_VERSION}' \
+  -X 'github.com/user00265/dxclustergoapi/version.GitCommit=${GIT_COMMIT}'" \
+  -o /dxcluster-go-api ./
 
 # Stage 2: Create the final Distroless image
 FROM gcr.io/distroless/static:latest
