@@ -38,6 +38,6 @@ jobs:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       with:
         args: >
-          -Dsonar.projectKey=user00265_dxclustergoapi
+          -Dsonar.projectKey=user00265_DXClusterGoAPI
           -Dsonar.organization=user00265
           -Dsonar.go.coverage.reportPaths=coverage.out
