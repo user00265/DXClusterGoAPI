@@ -6,7 +6,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/user00265/dxclustergoapi)](https://goreportcard.com/report/github.com/user00265/dxclustergoapi)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Simple JSON REST API for DX Cluster spots. Connects to multiple DX clusters and/or POTA API, caches spots in memory, and enriches them with DXCC and LoTW data. Written in Go for performance.
+Simple JSON REST API for DX Cluster spots. Connects to multiple DX clusters and/or POTA API, caches spots in memory, and enhances them with DXCC and LoTW data. Written in Go for performance.
 
 Inspired by [@int2001's DXClusterAPI](https://github.com/int2001/DXClusterAPI) with multi-cluster support and optional Redis caching, as well as removing the need to ping Wavelog for DXCC data making this project truly standalone.
 
@@ -18,7 +18,7 @@ Make the last N spots from DX clusters accessible via JSON API without needing a
 
 - Connect to multiple DX clusters simultaneously (including SOTA clusters)
 - Optional POTA (Parks On The Air) API integration
-- Enriches spots with:
+- Enhances spots with:
   - DXCC data (continent, entity, flag emoji, CQ/ITU zones, lat/lng) from Club Log
   - LoTW user status from ARRL data
   - Amateur radio band calculation

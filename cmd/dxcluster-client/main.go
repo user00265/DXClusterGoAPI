@@ -283,7 +283,7 @@ func RunApplication(ctx context.Context, args []string) int {
 	// ═══════════════════════════════════════════════════════════════════════════
 	// CRITICAL BARRIER: DXCC and LoTW data are now FULLY LOADED and ready.
 	// ═══════════════════════════════════════════════════════════════════════════
-	// Spots can now be enriched immediately upon arrival from any source.
+	// Spots can now be enhanced immediately upon arrival from any source.
 	logging.Notice("DXCC and LoTW data loaded. Ready to initialize spot sources and HTTP API.")
 
 	// --- 6. Initialize POTA Client (if enabled) ---
@@ -375,7 +375,7 @@ func RunApplication(ctx context.Context, args []string) int {
 		logging.Info("DX Cluster client %s:%s connecting...", dxClusterHosts[i], cfg.Clusters[i].Port.String())
 	}
 
-	// --- 8. Spot Aggregation & Enrichment ---
+	// --- 8. Spot Aggregation & Enhancement ---
 	spotChannels := make([]<-chan spot.Spot, 0) // Collect all spot output channels
 
 	// Add DX Cluster spot channels (convert cluster.Spot -> unified spot.Spot)
@@ -470,7 +470,7 @@ func RunApplication(ctx context.Context, args []string) int {
 		spotChannels = append(spotChannels, ch)
 	}
 
-	// Goroutine to aggregate, enrich, and cache spots
+	// Goroutine to aggregate, enhance, and cache spots
 	go func() {
 		logging.Info("Spot aggregation goroutine starting.")
 		merged := mergeSpotChannels(spotChannels...)
@@ -545,24 +545,24 @@ func RunApplication(ctx context.Context, args []string) int {
 				if verbose {
 					logging.Debug("Aggregator received spot: source=%s spotter=%s spotted=%s freq=%s msg=%q when=%s", receivedSpot.Source, receivedSpot.Spotter, receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), receivedSpot.Message, receivedSpot.When.Format(time.RFC3339))
 				}
-				enrichedSpot, err := enrichSpot(ctx, receivedSpot, dxccClient, lotwClient)
+				enhancedSpot, err := enhanceSpot(ctx, receivedSpot, dxccClient, lotwClient)
 				if err != nil {
-					logging.Error("Failed to enrich spot from %s (%s->%s @ %s): %v", receivedSpot.Source, receivedSpot.Spotter, receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), err)
-					// Still add the non-enriched spot if enrichment fails, or discard?
-					// For now, add the partially enriched one.
+					logging.Error("Failed to enhance spot from %s (%s->%s @ %s): %v", receivedSpot.Source, receivedSpot.Spotter, receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), err)
+					// Still add the non-enhanced spot if enhancement fails, or discard?
+					// For now, add the partially enhanced one.
 					centralSpotCache.AddSpot(receivedSpot)
-					logging.Info("SPOT #%d CACHED (non-enriched): %s -> %s @ %s [%s]", spotCount, receivedSpot.Spotter, receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), receivedSpot.Source)
+					logging.Info("SPOT #%d CACHED (non-enhanced): %s -> %s @ %s [%s]", spotCount, receivedSpot.Spotter, receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), receivedSpot.Source)
 					if verbose {
-						logging.Debug("Aggregator added non-enriched spot from %s (spotter=%s)", receivedSpot.Source, receivedSpot.Spotter)
+						logging.Debug("Aggregator added non-enhanced spot from %s (spotter=%s)", receivedSpot.Source, receivedSpot.Spotter)
 					}
 					continue
 				}
-				centralSpotCache.AddSpot(enrichedSpot)
-				logging.Info("SPOT #%d CACHED (enriched): %s -> %s @ %s (%s) [%s]", spotCount, enrichedSpot.Spotter, enrichedSpot.Spotted, utils.FormatFrequency(enrichedSpot.Frequency), enrichedSpot.Band, enrichedSpot.Source)
+				centralSpotCache.AddSpot(enhancedSpot)
+				logging.Info("SPOT #%d CACHED (enhanced): %s -> %s @ %s (%s) [%s]", spotCount, enhancedSpot.Spotter, enhancedSpot.Spotted, utils.FormatFrequency(enhancedSpot.Frequency), enhancedSpot.Band, enhancedSpot.Source)
 				if verbose {
-					logging.Debug("Aggregator added enriched spot from %s (spotter=%s)", enrichedSpot.Source, enrichedSpot.Spotter)
+					logging.Debug("Aggregator added enhanced spot from %s (spotter=%s)", enhancedSpot.Source, enhancedSpot.Spotter)
 				}
-				// logging.Debug("New Spot: %s -> %s @ %.3f MHz (%s) from %s", enrichedSpot.Spotter, enrichedSpot.Spotted, enrichedSpot.Frequency, enrichedSpot.Band, enrichedSpot.Source)
+				// logging.Debug("New Spot: %s -> %s @ %s (%s) from %s", enhancedSpot.Spotter, enhancedSpot.Spotted, utils.FormatFrequency(enhancedSpot.Frequency), enhancedSpot.Band, enhancedSpot.Source)
 			}
 		}
 	}()
@@ -736,7 +736,7 @@ func cleanCallsignForDXCC(call string) string {
 }
 
 // enrichSpot enriches a raw spot with DXCC and LoTW information.
-func enrichSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwClient *lotw.Client) (spot.Spot, error) {
+func enhanceSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwClient *lotw.Client) (spot.Spot, error) {
 	// Known pseudo-callsigns used by automated systems (skip DXCC/LoTW lookups)
 	pseudoCallsigns := map[string]bool{
 		"RBNHOLE": true, // Reverse Beacon Network aggregated spots
