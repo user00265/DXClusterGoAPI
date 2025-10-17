@@ -30,10 +30,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
         go-version: '1.25'
 
@@ -42,10 +42,11 @@ jobs:
       run: |
         TAG_NAME=${GITHUB_REF_NAME}
         COMMIT_SHA=${GITHUB_SHA}
+        SHORT_SHA=${COMMIT_SHA:0:7}
         
         # Initialize variables
-        BUILD_VERSION="unknown"
-        GIT_COMMIT=$COMMIT_SHA
+        BUILD_VERSION="dev"
+        GIT_COMMIT=$SHORT_SHA
         IS_SEMVER_TAG="false"
         PUSH_DOCKER="false" # Flag to control if Docker images should be pushed at all
         
@@ -73,15 +74,15 @@ jobs:
     - name: Build application (dry run)
       run: |
         go build -v \
-        -ldflags "-X 'github.com/user00265/dxclustergoapi/internal/version.BuildVersion=${{ steps.get_version.outputs.BUILD_VERSION }}' \
-                  -X 'github.com/user00265/dxclustergoapi/internal/version.GitCommit=${{ steps.get_version.outputs.GIT_COMMIT }}'" \
-        ./cmd/dxcluster-client
+        -ldflags "-X 'github.com/user00265/dxclustergoapi/version.BuildVersion=${{ steps.get_version.outputs.BUILD_VERSION }}' \
+                  -X 'github.com/user00265/dxclustergoapi/version.GitCommit=${{ steps.get_version.outputs.GIT_COMMIT }}'" \
+        ./
 
     - name: Run unit tests
       run: go test -v -short ./...
 
     - name: Run integration tests
-      run: go test -v -tags=integration ./cmd/dxcluster-client
+      run: go test -v -tags=integration ./...
 
     # Build and Push Docker images (only if PUSH_DOCKER is true)
     - name: Set up Docker Buildx
@@ -92,7 +93,7 @@ jobs:
 
     - name: Set up QEMU (multi-arch emulation)
       if: steps.get_version.outputs.PUSH_DOCKER == 'true'
-      uses: docker/setup-qemu-action@v2
+      uses: docker/setup-qemu-action@v3
 
     - name: Login to Docker Hub
       if: steps.get_version.outputs.PUSH_DOCKER == 'true' && github.event_name != 'pull_request'
@@ -131,7 +132,7 @@ jobs:
 
     - name: Build and Push Docker images (multi-arch)
       if: steps.get_version.outputs.PUSH_DOCKER == 'true' && github.event_name != 'pull_request'
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v6
       with:
         context: .
         push: true
