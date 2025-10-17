@@ -27,6 +27,7 @@ import (
 	"github.com/user00265/dxclustergoapi/internal/pota"
 	"github.com/user00265/dxclustergoapi/internal/redisclient"
 	"github.com/user00265/dxclustergoapi/internal/spot"
+	"github.com/user00265/dxclustergoapi/internal/utils"
 	"github.com/user00265/dxclustergoapi/version" // For User-Agent string
 )
 
@@ -525,7 +526,7 @@ func RunApplication(ctx context.Context, args []string) int {
 
 				// Determine band from frequency for duplicate detection
 				// (same station can be on multiple bands simultaneously)
-				band := spot.BandFromName(receivedSpot.Frequency)
+				band := utils.BandFromFreq(receivedSpot.Frequency)
 
 				// Check for duplicate spot (same spotter+spotted+band within 30 seconds)
 				key := spotKey{
@@ -790,7 +791,7 @@ func enrichSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwC
 	s.SpottedInfo.IsLoTWUser = spottedLoTW != nil // Convenience field
 
 	// Add Band information
-	s.Band = spot.BandFromName(s.Frequency)
+	s.Band = utils.BandFromFreq(s.Frequency)
 	logging.Debug("Band assignment: %.3f kHz -> %s", s.Frequency, s.Band)
 
 	return s, nil

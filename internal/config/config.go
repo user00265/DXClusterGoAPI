@@ -23,7 +23,7 @@ const (
 
 	// Hard-coded Club Log API details (per-application, not per-user)
 	// These values are based on the original Node.js project's use.
-	DefaultClubLogAPIKey = "608df94896cb9c5421ae748235492b43815610c9"
+	ClubLogAPIKey = "608df94896cb9c5421ae748235492b43815610c9"
 )
 
 var (

@@ -578,7 +578,7 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 	)
 
 	// Attempt Club Log first with retry logic (use configured API key if present)
-	clubKey := config.DefaultClubLogAPIKey
+	clubKey := config.ClubLogAPIKey
 	if c.cfg.ClubLogAPIKey != "" {
 		clubKey = c.cfg.ClubLogAPIKey
 	}

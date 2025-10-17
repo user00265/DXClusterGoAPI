@@ -19,11 +19,11 @@ import (
 
 	"github.com/user00265/dxclustergoapi/internal/config"
 	"github.com/user00265/dxclustergoapi/internal/logging"
-	"github.com/user00265/dxclustergoapi/internal/spot"
+	"github.com/user00265/dxclustergoapi/internal/utils"
 )
 
 const (
-	defaultLoginPrompt   = "Please enter your call:"
+	defaultLoginPrompt   = "login:"
 	defaultPassPrompt    = "password:"
 	connectionTerminator = "\n"    // Newline terminator for commands
 	dxIDPrefix           = "DX de" // Prefix to identify DX spots
@@ -118,11 +118,11 @@ func NewClient(cfg config.ClusterConfig) (*Client, error) {
 		buf = 32
 	}
 
+	// Use small buffered channels to avoid dropping events when the
+	// receiver isn't scheduled immediately. Buffer size is configurable
+	// via per-cluster config or DXC_CHANNEL_BUFFER env var.
 	return &Client{
-		cfg: cfg,
-		// Use small buffered channels to avoid dropping events when the
-		// receiver isn't scheduled immediately. Buffer size is configurable
-		// via per-cluster config or DXC_CHANNEL_BUFFER env var.
+		cfg:          cfg,
 		SpotChan:     make(chan Spot, buf),
 		MessageChan:  make(chan string, buf),
 		ErrorChan:    make(chan error, buf),
@@ -525,7 +525,7 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 		}
 
 		// Detect band from frequency for logging
-		band := spot.BandFromName(frequency)
+		band := utils.BandFromFreq(frequency)
 
 		c.safeSendSpot(sp)
 		logging.Info("DX cluster emitted spot: spotted=%s spotter=%s freq=%.3f band=%s timestamp=%s msg=%q source=%s",
