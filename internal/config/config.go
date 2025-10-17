@@ -84,7 +84,7 @@ type RedisConfig struct {
 	DB                 int           `env:"REDIS_DB" envDefault:"0"`
 	UseTLS             bool          `env:"REDIS_USE_TLS" envDefault:"false"`
 	InsecureSkipVerify bool          `env:"REDIS_INSECURE_SKIP_VERIFY" envDefault:"false"`
-	SpotExpiry         time.Duration `env:"REDIS_SPOT_EXPIRY" envDefault:"600s"` // Default 10 minutes
+	SpotExpiry         time.Duration `env:"REDIS_SPOT_EXPIRY" envDefault:"600s"` // Default 10 minutes (TTL for inactive spots; cache is updated on each re-spot)
 }
 
 // Config holds all application configuration.

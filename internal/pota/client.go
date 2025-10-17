@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +17,7 @@ import (
 	"github.com/user00265/dxclustergoapi/internal/logging"
 	"github.com/user00265/dxclustergoapi/internal/redisclient"
 	"github.com/user00265/dxclustergoapi/internal/spot"
+	"github.com/user00265/dxclustergoapi/internal/utils"
 	"github.com/user00265/dxclustergoapi/version" // For User-Agent
 )
 
@@ -53,7 +52,7 @@ type PotaRawSpot struct {
 type Spot struct {
 	Spotter        string    `json:"spotter"`
 	Spotted        string    `json:"spotted"`
-	Frequency      float64   `json:"frequency"` // In MHz
+	Frequency      int64     `json:"frequency"` // In Hz (canonical storage unit)
 	Message        string    `json:"message"`
 	When           time.Time `json:"when"`
 	Source         string    `json:"source"` // "pota"
@@ -63,10 +62,10 @@ type Spot struct {
 	} `json:"additional_data"`
 }
 
-// SpotCacher defines the interface for caching POTA spots to prevent re-emitting duplicates.
-type SpotCacher interface {
-	IsSpotInCache(ctx context.Context, spot Spot, mode string) (bool, error)
-	AddSpotToCache(ctx context.Context, spot Spot, mode string) error
+// SpotTracker defines the interface for tracking POTA spots with expiry management.
+type SpotTracker interface {
+	GetSpot(ctx context.Context, sp spot.Spot, mode string) (*spot.Spot, error)
+	UpdateSpot(ctx context.Context, sp spot.Spot, mode string) error
 	// ClearCache() error // Not strictly needed with expiration, but useful for testing or explicit resets
 }
 
@@ -75,82 +74,154 @@ type HTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-// InMemorySpotCacher implements SpotCacher using an in-memory slice.
-type InMemorySpotCacher struct {
-	cache        []Spot
-	cacheMutex   sync.RWMutex
-	maxCacheSize int // Max spots to keep in memory (similar to MAXCACHE)
+// spotCacheEntry represents a cached spot with an expiry time
+type spotCacheEntry struct {
+	spot   spot.Spot
+	expiry time.Time
 }
 
-// NewInMemorySpotCacher creates a new in-memory cache.
-func NewInMemorySpotCacher(maxSize int) *InMemorySpotCacher {
-	return &InMemorySpotCacher{
-		cache:        make([]Spot, 0, maxSize),
+// InMemorySpotTracker implements SpotTracker using an in-memory map with expiry tracking.
+type InMemorySpotTracker struct {
+	cache        map[string]spotCacheEntry // Key: "spotted:message:mode"
+	cacheMutex   sync.RWMutex
+	maxCacheSize int           // Max spots to keep in memory
+	spotExpiry   time.Duration // How long to keep spots before expiring
+}
+
+// NewInMemorySpotTracker creates a new in-memory spot tracker.
+func NewInMemorySpotTracker(maxSize int) *InMemorySpotTracker {
+	return &InMemorySpotTracker{
+		cache:        make(map[string]spotCacheEntry),
 		maxCacheSize: maxSize,
+		spotExpiry:   10 * time.Minute, // Default 10 minutes to match Redis behavior
 	}
 }
 
-// IsSpotInCache checks if a spot (excluding "when") exists in the cache,
-// considering frequency deviation. This logic mimics the original Node.js code.
-func (c *InMemorySpotCacher) IsSpotInCache(ctx context.Context, newSpot Spot, mode string) (bool, error) {
+// GetSpot retrieves a spot from the tracker if it exists and hasn't expired.
+func (c *InMemorySpotTracker) GetSpot(ctx context.Context, newSpot spot.Spot, mode string) (*spot.Spot, error) {
 	c.cacheMutex.RLock()
 	defer c.cacheMutex.RUnlock()
 
-	allowedDeviation := getAllowedDeviation(mode)
-	for _, existingSpot := range c.cache {
-		if existingSpot.Spotted == newSpot.Spotted && strings.EqualFold(existingSpot.Message, newSpot.Message) {
-			// allowedDeviation returned in kHz; convert to MHz for comparison
-			allowedMHz := allowedDeviation / 1000.0
-			diff := math.Abs(newSpot.Frequency - existingSpot.Frequency)
-			// Debug print to help tests understand floating point rounding behavior
-			logging.Debug("POTA dedupe check (in-memory): spotted=%s msg=%q existingFreq=%f newFreq=%f diff=%f allowedMHz=%f",
-				newSpot.Spotted, newSpot.Message, existingSpot.Frequency, newSpot.Frequency, diff, allowedMHz)
-			// Consider a spot a duplicate only if the frequency difference is
-			// strictly less than the allowed deviation. Use a tiny epsilon to
-			// avoid floating point rounding causing near-equal values to compare
-			// as smaller than the threshold.
-			const eps = 1e-9
-			if diff < allowedMHz-eps {
-				return true, nil
-			}
-		}
+	key := fmt.Sprintf("%s:%s:%s", newSpot.Spotted, strings.ToLower(newSpot.Message), strings.ToLower(mode))
+	entry, exists := c.cache[key]
+	if !exists {
+		return nil, nil
 	}
-	return false, nil
+
+	// Check if entry has expired
+	if time.Now().After(entry.expiry) {
+		return nil, nil
+	}
+
+	return &entry.spot, nil
 }
 
-// AddSpotToCache adds a spot to the in-memory cache, managing its size.
-func (c *InMemorySpotCacher) AddSpotToCache(ctx context.Context, spot Spot, mode string) error {
+// UpdateSpot adds or updates a spot in the in-memory tracker with expiry tracking.
+func (c *InMemorySpotTracker) UpdateSpot(ctx context.Context, sp spot.Spot, mode string) error {
 	c.cacheMutex.Lock()
 	defer c.cacheMutex.Unlock()
 
-	// Append new spot
-	c.cache = append(c.cache, spot)
+	key := fmt.Sprintf("%s:%s:%s", sp.Spotted, strings.ToLower(sp.Message), strings.ToLower(mode))
 
-	logging.Debug("POTA add to in-memory cache: spotted=%s msg=%q freq=%f", spot.Spotted, spot.Message, spot.Frequency)
-
-	// Trim cache if it exceeds max size, keeping the freshest (last) spots
-	if len(c.cache) > c.maxCacheSize {
-		c.cache = c.cache[len(c.cache)-c.maxCacheSize:]
+	// Update or insert the spot with new expiry time
+	c.cache[key] = spotCacheEntry{
+		spot:   sp,
+		expiry: time.Now().Add(c.spotExpiry),
 	}
+
+	logging.Debug("POTA add/update in-memory tracker: key=%s freq=%s expiry=%v", key, utils.FormatFrequency(sp.Frequency), c.spotExpiry)
+
+	// Clean up expired entries if cache is getting large
+	if len(c.cache) > c.maxCacheSize*2 { // Clean up when we exceed 2x max size
+		now := time.Now()
+		for k, v := range c.cache {
+			if now.After(v.expiry) {
+				delete(c.cache, k)
+			}
+		}
+	}
+
+	// If still too large, remove oldest entries
+	if len(c.cache) > c.maxCacheSize {
+		// Find entries with earliest expiry and remove them
+		type expEntry struct {
+			key    string
+			expiry time.Time
+		}
+		entries := make([]expEntry, 0, len(c.cache))
+		for k, v := range c.cache {
+			entries = append(entries, expEntry{k, v.expiry})
+		}
+		// Sort by expiry time (ascending)
+		for i := 0; i < len(entries)-1; i++ {
+			for j := i + 1; j < len(entries); j++ {
+				if entries[j].expiry.Before(entries[i].expiry) {
+					entries[i], entries[j] = entries[j], entries[i]
+				}
+			}
+		}
+		// Remove oldest entries until we're under maxCacheSize
+		removeCount := len(c.cache) - c.maxCacheSize
+		for i := 0; i < removeCount && i < len(entries); i++ {
+			delete(c.cache, entries[i].key)
+		}
+	}
+
 	return nil
 }
 
-// RedisSpotCacher implements SpotCacher using Redis.
-type RedisSpotCacher struct {
+// RedisSpotTracker implements SpotTracker using Redis.
+type RedisSpotTracker struct {
 	rdb        *redisclient.Client
 	spotExpiry time.Duration
 }
 
-// NewRedisSpotCacher creates a new Redis-backed cache.
-func NewRedisSpotCacher(rdb *redisclient.Client, spotExpiry time.Duration) *RedisSpotCacher {
-	return &RedisSpotCacher{
+// NewRedisSpotTracker creates a new Redis-backed spot tracker.
+func NewRedisSpotTracker(rdb *redisclient.Client, spotExpiry time.Duration) *RedisSpotTracker {
+	return &RedisSpotTracker{
 		rdb:        rdb,
 		spotExpiry: spotExpiry,
 	}
 }
 
-// IsSpotInCache checks if a spot exists in Redis, using a composite key and frequency deviation.
-func (c *RedisSpotCacher) IsSpotInCache(ctx context.Context, newSpot Spot, mode string) (bool, error) {
+// GetSpot retrieves a spot from Redis, if it exists and hasn't expired.
+func (c *RedisSpotTracker) GetSpot(ctx context.Context, newSpot spot.Spot, mode string) (*spot.Spot, error) {
+	// Generate a base key for the spot
+	baseKey := fmt.Sprintf("pota:spot:%s:%s:%s", newSpot.Spotted, strings.ToLower(newSpot.Message), strings.ToLower(mode))
+
+	cachedSpotJSON, err := c.rdb.Get(ctx, baseKey).Result()
+	if err == redis.Nil {
+		return nil, nil // Not found
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spot from Redis: %w", err)
+	}
+
+	// Support stored value being either a single Spot JSON or an array of Spots.
+	var storedSpot spot.Spot
+	if err := json.Unmarshal([]byte(cachedSpotJSON), &storedSpot); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal cached spot JSON: %w", err)
+	}
+
+	return &storedSpot, nil
+}
+
+// UpdateSpot updates or inserts a spot in Redis with TTL expiry.
+func (c *RedisSpotTracker) UpdateSpot(ctx context.Context, sp spot.Spot, mode string) error {
+	baseKey := fmt.Sprintf("pota:spot:%s:%s:%s", sp.Spotted, strings.ToLower(sp.Message), strings.ToLower(mode))
+
+	spotJSON, err := json.Marshal(sp)
+	if err != nil {
+		return fmt.Errorf("failed to marshal spot for Redis: %w", err)
+	}
+
+	logging.Debug("POTA update Redis tracker: key=%s freq=%s expiry=%v", baseKey, utils.FormatFrequency(sp.Frequency), c.spotExpiry)
+	return c.rdb.SetEX(ctx, baseKey, spotJSON, c.spotExpiry).Err()
+}
+
+// Old IsSpotInCache checks if a spot exists in Redis, using a composite key and frequency deviation.
+// (Deprecated - no longer used for filtering, but kept for reference)
+func (c *RedisSpotTracker) isSpotInCacheOld(ctx context.Context, newSpot spot.Spot, mode string) (bool, error) {
 	// Generate a base key for the spot (excluding frequency)
 	baseKey := fmt.Sprintf("pota:spot:%s:%s:%s", newSpot.Spotted, strings.ToLower(newSpot.Message), strings.ToLower(mode))
 
@@ -171,67 +242,29 @@ func (c *RedisSpotCacher) IsSpotInCache(ctx context.Context, newSpot Spot, mode 
 	}
 
 	// Support stored value being either a single Spot JSON or an array of Spots.
-	var existingSpots []Spot
+	var existingSpots []spot.Spot
 	if err := json.Unmarshal([]byte(cachedSpotJSON), &existingSpots); err != nil {
 		// Try single Spot
-		var single Spot
+		var single spot.Spot
 		if err2 := json.Unmarshal([]byte(cachedSpotJSON), &single); err2 != nil {
 			return false, fmt.Errorf("failed to unmarshal cached spot JSON (both array and single): %w / %v", err, err2)
 		}
-		existingSpots = []Spot{single}
+		existingSpots = []spot.Spot{single}
 	}
 
 	allowedDeviation := getAllowedDeviation(mode)
-	allowedMHz := allowedDeviation / 1000.0
+	toleranceHz := int64(allowedDeviation * 1000) // Convert kHz to Hz
 	for _, existingSpot := range existingSpots {
 		if strings.EqualFold(existingSpot.Spotted, newSpot.Spotted) && strings.EqualFold(existingSpot.Message, newSpot.Message) {
-			diff := math.Abs(newSpot.Frequency - existingSpot.Frequency)
-			logging.Debug("POTA dedupe check (redis): spotted=%s msg=%q existingFreq=%f newFreq=%f diff=%f allowedMHz=%f",
-				newSpot.Spotted, newSpot.Message, existingSpot.Frequency, existingSpot.Frequency, diff, allowedMHz)
-			const eps = 1e-9
-			if diff < allowedMHz-eps {
+			if utils.FrequencyDeviation(newSpot.Frequency, existingSpot.Frequency, toleranceHz) {
+				logging.Debug("POTA dedupe check (redis): spotted=%s msg=%q existingFreq=%s newFreq=%s within tolerance=%d Hz",
+					newSpot.Spotted, newSpot.Message, utils.FormatFrequency(existingSpot.Frequency), utils.FormatFrequency(newSpot.Frequency), toleranceHz)
 				return true, nil
 			}
 		}
 	}
 
 	return false, nil
-}
-
-// AddSpotToCache adds a spot to Redis with a TTL.
-func (c *RedisSpotCacher) AddSpotToCache(ctx context.Context, spot Spot, mode string) error {
-	baseKey := fmt.Sprintf("pota:spot:%s:%s:%s", spot.Spotted, strings.ToLower(spot.Message), strings.ToLower(mode))
-	// Use SetEX to set with expiry
-	// If an existing entry exists, append to array so we keep multiple nearby frequencies
-	existingJSON, err := c.rdb.Get(ctx, baseKey).Result()
-	if err == redis.Nil {
-		// No existing value, store as single-element array for consistency
-		arr := []Spot{spot}
-		out, _ := json.Marshal(arr)
-		logging.Debug("POTA add to redis cache (new): key=%s freq=%f", baseKey, spot.Frequency)
-		return c.rdb.SetEX(ctx, baseKey, out, c.spotExpiry).Err()
-	}
-	if err != nil {
-		return fmt.Errorf("failed to get existing redis spot for append: %w", err)
-	}
-
-	var spots []Spot
-	if err := json.Unmarshal([]byte(existingJSON), &spots); err != nil {
-		// Try single Spot value
-		var single Spot
-		if err2 := json.Unmarshal([]byte(existingJSON), &single); err2 != nil {
-			// fallback: overwrite with new array containing both serialized values
-			spots = []Spot{spot}
-		} else {
-			spots = []Spot{single, spot}
-		}
-	} else {
-		spots = append(spots, spot)
-	}
-
-	out, _ := json.Marshal(spots)
-	logging.Debug("POTA add to redis cache (append): key=%s freq=%f total=%d", baseKey, spot.Frequency, len(spots))
-	return c.rdb.SetEX(ctx, baseKey, out, c.spotExpiry).Err()
 }
 
 // Client manages POTA API polling and spot processing.
@@ -243,8 +276,8 @@ type Client struct {
 	// polling control
 	pollStop chan struct{}
 	pollDone chan struct{}
-	cacher   SpotCacher
-	SpotChan chan Spot // Output channel for new, unique POTA spots
+	tracker  SpotTracker
+	SpotChan chan spot.Spot // Output channel for new POTA spots
 }
 
 // NewClient creates and returns a new POTA client.
@@ -260,18 +293,18 @@ func NewClient(ctx context.Context, cfg config.Config, rdb *redisclient.Client) 
 		},
 		// Buffer the output channel so that an initial immediate poll can
 		// emit spots before downstream consumers (forwarders) are wired up.
-		SpotChan: make(chan Spot, 8),
+		SpotChan: make(chan spot.Spot, 8),
 	}
 
 	client.HTTPClient = client.httpClient
 
-	// Choose caching mechanism
+	// Choose tracking mechanism
 	if cfg.Redis.Enabled && rdb != nil {
-		client.cacher = NewRedisSpotCacher(rdb, cfg.Redis.SpotExpiry)
-		logging.Notice("POTA client using Redis cache with expiry: %s", cfg.Redis.SpotExpiry)
+		client.tracker = NewRedisSpotTracker(rdb, cfg.Redis.SpotExpiry)
+		logging.Notice("POTA client using Redis tracker with expiry: %s", cfg.Redis.SpotExpiry)
 	} else {
-		client.cacher = NewInMemorySpotCacher(cfg.MaxCache) // Use MaxCache as a proxy for in-memory size
-		logging.Info("POTA client using in-memory cache (max %d spots).", cfg.MaxCache)
+		client.tracker = NewInMemorySpotTracker(cfg.MaxCache) // Use MaxCache as a proxy for in-memory size
+		logging.Info("POTA client using in-memory tracker (max %d spots).", cfg.MaxCache)
 	}
 
 	// polling will be started via StartPolling
@@ -365,15 +398,12 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 	logging.Info("Received %d spots from %s", len(rawSpots), config.POTAAPIEndpoint)
 
 	for _, item := range rawSpots {
-		// Parse frequency from string to float64
-		freq, err := strconv.ParseFloat(item.Frequency, 64)
-		if err != nil || freq == 0 {
+		// Parse frequency from string to Hz using utils
+		freqHz, err := utils.ParseFrequency(item.Frequency)
+		if err != nil || freqHz == 0 {
 			logging.Warn("POTA received spot with invalid frequency '%s': %v", item.Frequency, err)
 			continue
 		}
-
-		// POTA API returns frequency in kHz, convert to MHz
-		freqMHz := freq / 1000.0
 
 		// Parse spot time from string to time.Time
 		spotTime, err := time.Parse("2006-01-02T15:04:05", item.SpotTime)
@@ -400,14 +430,14 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 		spotter := cleanCallsign(item.Spotter)
 		activator := cleanCallsign(item.Activator)
 		if spotter == "" || activator == "" {
-			logging.Warn("POTA spot rejected: missing spotter=%q or activator=%q ref=%s freq=%.1f", spotter, activator, item.Reference, freq)
+			logging.Warn("POTA spot rejected: missing spotter=%q or activator=%q ref=%s freq=%s", spotter, activator, item.Reference, utils.FormatFrequency(freqHz))
 			continue // Skip this spot
 		}
 
 		potaSpot := Spot{
 			Spotter:   spotter,
 			Spotted:   activator,
-			Frequency: freqMHz,
+			Frequency: freqHz,
 			// Build message without extra parentheses to match tests' expected canonicalization
 			Message: fmt.Sprintf("%s%sPOTA @ %s %s %s", item.Mode, func() string {
 				if item.Mode != "" {
@@ -421,32 +451,35 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 		potaSpot.AdditionalData.PotaRef = item.Reference
 		potaSpot.AdditionalData.PotaMode = item.Mode
 
-		logging.Debug("POTA received raw spot: activator=%s spotter=%s freq=%.1f mode=%s ref=%s", item.Activator, item.Spotter, freq, item.Mode, item.Reference)
-		isNewSpot, err := c.cacher.IsSpotInCache(ctx, potaSpot, item.Mode)
-		if err != nil {
-			logging.Error("Failed to check POTA spot cache: %v", err)
-			continue
+		logging.Debug("POTA received spot: activator=%s spotter=%s freq=%s mode=%s ref=%s", activator, spotter, utils.FormatFrequency(freqHz), item.Mode, item.Reference)
+		// Use the unified canonical spot for all processing
+		unified := spot.Spot{
+			Spotter:   potaSpot.Spotter,
+			Spotted:   potaSpot.Spotted,
+			Frequency: potaSpot.Frequency,
+			Message:   potaSpot.Message,
+			When:      potaSpot.When,
+			Source:    potaSpot.Source,
+		}
+		unified.AdditionalData.PotaRef = potaSpot.AdditionalData.PotaRef
+		unified.AdditionalData.PotaMode = potaSpot.AdditionalData.PotaMode
+
+		// Always emit the spot. If a location is re-spotted (e.g., frequency change),
+		// we emit the updated spot and update the cache accordingly.
+		logging.Info("POTA emitting spot: spotted=%s freq=%s msg=%q", potaSpot.Spotted, utils.FormatFrequency(potaSpot.Frequency), potaSpot.Message)
+
+		// Send the unified, cleaned spot so downstream consumers and JSON
+		// marshaling only ever see the canonical values (no '-#').
+		select {
+		case c.SpotChan <- unified:
+		case <-ctx.Done():
+			// If context is canceled, don't block; drop the spot
 		}
 
-		if !isNewSpot {
-			logging.Info("POTA emitting spot: spotted=%s freq=%f msg=%q", potaSpot.Spotted, potaSpot.Frequency, potaSpot.Message)
-			// Convert to unified spot.Spot for downstream consumers
-			unified := spot.Spot{
-				Spotter:   potaSpot.Spotter,
-				Spotted:   potaSpot.Spotted,
-				Frequency: potaSpot.Frequency,
-				Message:   potaSpot.Message,
-				When:      potaSpot.When,
-				Source:    potaSpot.Source,
-			}
-			unified.AdditionalData.PotaRef = potaSpot.AdditionalData.PotaRef
-			unified.AdditionalData.PotaMode = potaSpot.AdditionalData.PotaMode
-
-			// Send package-local POTA Spot type so tests and consumers receive the expected type
-			c.SpotChan <- potaSpot
-			if err := c.cacher.AddSpotToCache(ctx, potaSpot, item.Mode); err != nil {
-				logging.Error("Failed to add POTA spot to cache: %v", err)
-			}
+		// Update the tracker with the current spot (replaces previous entry if it exists).
+		// This allows re-spotted activations to be re-emitted if frequency or other details change.
+		if err := c.tracker.UpdateSpot(ctx, unified, item.Mode); err != nil {
+			logging.Error("Failed to update POTA spot tracker: %v", err)
 		}
 	}
 	logging.Debug("POTA spot processing complete.")
@@ -472,7 +505,7 @@ func (c *Client) FetchAndProcessSpots(ctx context.Context) {
 	c.fetchAndProcessSpots(ctx)
 }
 
-// CacherAccessor exposes the cacher for tests.
-func (c *Client) CacherAccessor() SpotCacher {
-	return c.cacher
+// TrackerAccessor exposes the tracker for tests.
+func (c *Client) TrackerAccessor() SpotTracker {
+	return c.tracker
 }

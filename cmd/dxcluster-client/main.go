@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -400,9 +399,7 @@ func RunApplication(ctx context.Context, args []string) int {
 						return
 					}
 					forwardedCount++
-					logging.Info("CLUSTER [%s] RAW SPOT #%d: %s -> %s @ %.3f kHz - %s", clusterHost, forwardedCount, s.Spotter, s.Spotted, s.Frequency, s.Message)
-
-					// Send into the buffered forwarder channel. If the application is
+					logging.Info("CLUSTER [%s] RAW SPOT #%d: %s -> %s @ %s - %s", clusterHost, forwardedCount, s.Spotter, s.Spotted, utils.FormatFrequency(s.Frequency), s.Message) // Send into the buffered forwarder channel. If the application is
 					// shutting down, exit promptly via ctx.Done.
 					select {
 					case out <- spot.Spot{
@@ -448,10 +445,11 @@ func RunApplication(ctx context.Context, args []string) int {
 
 	// Add POTA spot channel (if enabled) — adapt pota.Spot to unified spot.Spot
 	if potaClient != nil {
-		// Buffer the POTA forwarder channel so initial immediate polls can
-		// emit spots before downstream consumers are wired up.
+		// POTA now emits canonical spot.Spot values directly. Forward them
+		// into the aggregator without re-wrapping to avoid accidental
+		// inclusion of raw API fields.
 		ch := make(chan spot.Spot, 8)
-		go func(in <-chan pota.Spot, out chan<- spot.Spot) {
+		go func(in <-chan spot.Spot, out chan<- spot.Spot) {
 			defer close(out)
 			for {
 				select {
@@ -461,21 +459,8 @@ func RunApplication(ctx context.Context, args []string) int {
 					if !ok {
 						return
 					}
-					sp := func() spot.Spot {
-						sp := spot.Spot{
-							Spotter:   s.Spotter,
-							Spotted:   s.Spotted,
-							Frequency: s.Frequency,
-							Message:   s.Message,
-							When:      s.When,
-							Source:    s.Source,
-						}
-						sp.AdditionalData.PotaRef = s.AdditionalData.PotaRef
-						sp.AdditionalData.PotaMode = s.AdditionalData.PotaMode
-						return sp
-					}()
 					select {
-					case out <- sp:
+					case out <- s:
 					case <-ctx.Done():
 						return
 					}
@@ -556,24 +541,24 @@ func RunApplication(ctx context.Context, args []string) int {
 				recentSpots[key] = now
 
 				spotCount++
-				logging.Info("SPOT #%d RECEIVED: %s -> %s @ %.3f kHz [%s] - %s", spotCount, receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Source, receivedSpot.Message)
+				logging.Info("SPOT #%d RECEIVED: %s -> %s @ %s [%s] - %s", spotCount, receivedSpot.Spotter, receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), receivedSpot.Source, receivedSpot.Message)
 				if verbose {
-					logging.Debug("Aggregator received spot: source=%s spotter=%s spotted=%s freq=%.3f msg=%q when=%s", receivedSpot.Source, receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Message, receivedSpot.When.Format(time.RFC3339))
+					logging.Debug("Aggregator received spot: source=%s spotter=%s spotted=%s freq=%s msg=%q when=%s", receivedSpot.Source, receivedSpot.Spotter, receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), receivedSpot.Message, receivedSpot.When.Format(time.RFC3339))
 				}
 				enrichedSpot, err := enrichSpot(ctx, receivedSpot, dxccClient, lotwClient)
 				if err != nil {
-					logging.Error("Failed to enrich spot from %s (%s->%s @ %.3f kHz): %v", receivedSpot.Source, receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, err)
+					logging.Error("Failed to enrich spot from %s (%s->%s @ %s): %v", receivedSpot.Source, receivedSpot.Spotter, receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), err)
 					// Still add the non-enriched spot if enrichment fails, or discard?
 					// For now, add the partially enriched one.
 					centralSpotCache.AddSpot(receivedSpot)
-					logging.Info("SPOT #%d CACHED (non-enriched): %s -> %s @ %.3f kHz [%s]", spotCount, receivedSpot.Spotter, receivedSpot.Spotted, receivedSpot.Frequency, receivedSpot.Source)
+					logging.Info("SPOT #%d CACHED (non-enriched): %s -> %s @ %s [%s]", spotCount, receivedSpot.Spotter, receivedSpot.Spotted, utils.FormatFrequency(receivedSpot.Frequency), receivedSpot.Source)
 					if verbose {
 						logging.Debug("Aggregator added non-enriched spot from %s (spotter=%s)", receivedSpot.Source, receivedSpot.Spotter)
 					}
 					continue
 				}
 				centralSpotCache.AddSpot(enrichedSpot)
-				logging.Info("SPOT #%d CACHED (enriched): %s -> %s @ %.3fMHz (%s) [%s]", spotCount, enrichedSpot.Spotter, enrichedSpot.Spotted, enrichedSpot.Frequency, enrichedSpot.Band, enrichedSpot.Source)
+				logging.Info("SPOT #%d CACHED (enriched): %s -> %s @ %s (%s) [%s]", spotCount, enrichedSpot.Spotter, enrichedSpot.Spotted, utils.FormatFrequency(enrichedSpot.Frequency), enrichedSpot.Band, enrichedSpot.Source)
 				if verbose {
 					logging.Debug("Aggregator added enriched spot from %s (spotter=%s)", enrichedSpot.Source, enrichedSpot.Spotter)
 				}
@@ -760,35 +745,35 @@ func enrichSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwC
 
 	// Enrich Spotter Info (skip if pseudo-callsign)
 	if !pseudoCallsigns[s.Spotter] {
-		cleanedSpotter := cleanCallsignForDXCC(s.Spotter)
-		spotterDxcc, err := dxccClient.GetDxccInfo(ctx, cleanedSpotter, nil) // No historical lookup date
-		if err != nil {
-			logging.Warn("DXCC lookup failed for spotter %s (cleaned: %s): %v", s.Spotter, cleanedSpotter, err)
+		spotterDxcc, _ := utils.LookupDXCC(s.Spotter, dxccClient)
+		if spotterDxcc != nil {
+			s.SpotterInfo.DXCC = spotterDxcc
+			// Extract core callsign for LoTW lookup
+			parsed := utils.ParseCallsign(s.Spotter)
+			spotterLoTW, err := lotwClient.GetLoTWUserActivity(ctx, parsed.B)
+			if err != nil {
+				logging.Warn("LoTW lookup failed for spotter %s (parsed: %s): %v", s.Spotter, parsed.B, err)
+			}
+			s.SpotterInfo.LoTW = spotterLoTW
+			s.SpotterInfo.IsLoTWUser = spotterLoTW != nil // Convenience field
 		}
-		spotterLoTW, err := lotwClient.GetLoTWUserActivity(ctx, cleanedSpotter)
-		if err != nil {
-			logging.Warn("LoTW lookup failed for spotter %s (cleaned: %s): %v", s.Spotter, cleanedSpotter, err)
-		}
-		s.SpotterInfo.DXCC = spotterDxcc
-		s.SpotterInfo.LoTW = spotterLoTW
-		s.SpotterInfo.IsLoTWUser = spotterLoTW != nil // Convenience field
 	} else {
 		logging.Debug("Skipping DXCC/LoTW lookup for pseudo-callsign spotter: %s", s.Spotter)
 	}
 
 	// Enrich Spotted Info
-	cleanedSpotted := cleanCallsignForDXCC(s.Spotted)
-	spottedDxcc, err := dxccClient.GetDxccInfo(ctx, cleanedSpotted, nil)
-	if err != nil {
-		logging.Warn("DXCC lookup failed for spotted %s (cleaned: %s): %v", s.Spotted, cleanedSpotted, err)
+	spottedDxcc, _ := utils.LookupDXCC(s.Spotted, dxccClient)
+	if spottedDxcc != nil {
+		s.SpottedInfo.DXCC = spottedDxcc
+		// Extract core callsign for LoTW lookup
+		parsed := utils.ParseCallsign(s.Spotted)
+		spottedLoTW, err := lotwClient.GetLoTWUserActivity(ctx, parsed.B)
+		if err != nil {
+			logging.Warn("LoTW lookup failed for spotted %s (parsed: %s): %v", s.Spotted, parsed.B, err)
+		}
+		s.SpottedInfo.LoTW = spottedLoTW
+		s.SpottedInfo.IsLoTWUser = spottedLoTW != nil // Convenience field
 	}
-	spottedLoTW, err := lotwClient.GetLoTWUserActivity(ctx, cleanedSpotted)
-	if err != nil {
-		logging.Warn("LoTW lookup failed for spotted %s (cleaned: %s): %v", s.Spotted, cleanedSpotted, err)
-	}
-	s.SpottedInfo.DXCC = spottedDxcc
-	s.SpottedInfo.LoTW = spottedLoTW
-	s.SpottedInfo.IsLoTWUser = spottedLoTW != nil // Convenience field
 
 	// Add Band information
 	s.Band = utils.BandFromFreq(s.Frequency)
@@ -836,33 +821,23 @@ func setupAPIRoutes(r *gin.RouterGroup, cache *spotCache, dxccClient *dxcc.Clien
 	r.GET("/spot/:qrg", func(c *gin.Context) {
 		qrgParam := c.Param("qrg")
 
-		// Parse frequency input and normalize to MHz
-		var qrgMHz float64
-		if qrgInt, err := strconv.Atoi(qrgParam); err == nil {
-			// Integer input - determine if Hz, kHz based on magnitude
-			if qrgInt >= 1000000 {
-				// Treat as Hz (e.g., 14250000 -> 14.250 MHz)
-				qrgMHz = float64(qrgInt) / 1000000.0
-			} else {
-				// Treat as kHz (e.g., 14250 -> 14.250 MHz)
-				qrgMHz = float64(qrgInt) / 1000.0
-			}
-		} else if qrgFloat, err := strconv.ParseFloat(qrgParam, 64); err == nil {
-			// Float input - treat as MHz (e.g., 14.250)
-			qrgMHz = qrgFloat
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid frequency format"})
+		// Parse frequency input to Hz using utils
+		qrgHz, err := utils.ParseFrequency(qrgParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid frequency format: %v", err)})
 			return
 		}
+
+		// Use 3 kHz tolerance for frequency matching (in Hz, so 3000 Hz)
+		toleranceHz := int64(3000)
 
 		spots := cache.GetAllSpots()
 		var latestSpot *spot.Spot
 		var youngestTime time.Time
 
 		for i := range spots {
-			// Compare frequencies with a small tolerance for floating point precision
-			// Spots are stored in MHz, so we compare against the converted value
-			if math.Abs(spots[i].Frequency-qrgMHz) < 0.001 {
+			// Compare frequencies with tolerance (in Hz)
+			if utils.FrequencyDeviation(spots[i].Frequency, qrgHz, toleranceHz) {
 				if latestSpot == nil || spots[i].When.After(youngestTime) {
 					latestSpot = &spots[i]
 					youngestTime = spots[i].When

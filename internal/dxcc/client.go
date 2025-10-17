@@ -1508,3 +1508,39 @@ func (c *Client) GetExceptions() map[string]DxccException {
 func (c *Client) GetEntities() map[int]DxccEntity {
 	return c.entitiesMap
 }
+
+// GetException checks if a callsign has a hardcoded exception entry.
+// Returns (entity, found).
+func (c *Client) GetException(call string) (*DxccInfo, bool) {
+	c.mapMutex.RLock()
+	defer c.mapMutex.RUnlock()
+	exc, found := c.exceptionsMap[call]
+	if !found {
+		return nil, false
+	}
+	info := &DxccInfo{
+		DXCCID: exc.ADIF,
+		Entity: exc.Entity,
+		CQZ:    exc.CQZ,
+		Cont:   exc.Cont,
+	}
+	return info, true
+}
+
+// GetPrefix looks up a prefix in the DXCC prefix map.
+// Returns (entity, found).
+func (c *Client) GetPrefix(prefix string) (*DxccInfo, bool) {
+	c.mapMutex.RLock()
+	defer c.mapMutex.RUnlock()
+	pfx, found := c.prefixesMap[prefix]
+	if !found {
+		return nil, false
+	}
+	info := &DxccInfo{
+		DXCCID: pfx.ADIF,
+		Entity: pfx.Entity,
+		CQZ:    pfx.CQZ,
+		Cont:   pfx.Cont,
+	}
+	return info, true
+}

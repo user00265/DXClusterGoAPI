@@ -1,17 +1,32 @@
 package utils
 
 // BandFromFreq converts a frequency to a ham radio band string.
-// Accepts frequency in Hz, kHz, or MHz and automatically detects the unit.
-func BandFromFreq(frequency float64) string {
+// Accepts frequency in Hz (int64), kHz, or MHz and automatically detects the unit.
+func BandFromFreq(frequency interface{}) string {
+	// Convert to float64 for calculation
+	var freqFloat float64
+	switch v := frequency.(type) {
+	case float64:
+		freqFloat = v
+	case float32:
+		freqFloat = float64(v)
+	case int64:
+		freqFloat = float64(v)
+	case int:
+		freqFloat = float64(v)
+	default:
+		return "Unknown"
+	}
+
 	// Auto-detect units and normalize to MHz for band detection
 	var frequencyMHz float64
 
-	if frequency >= 1000000 { // >= 1MHz, assume Hz
-		frequencyMHz = frequency / 1000000.0
-	} else if frequency >= 1000 { // >= 1kHz, assume kHz
-		frequencyMHz = frequency / 1000.0
+	if freqFloat >= 1000000 { // >= 1MHz, assume Hz
+		frequencyMHz = freqFloat / 1000000.0
+	} else if freqFloat >= 1000 { // >= 1kHz, assume kHz
+		frequencyMHz = freqFloat / 1000.0
 	} else { // < 1kHz, assume already MHz
-		frequencyMHz = frequency
+		frequencyMHz = freqFloat
 	}
 
 	switch {

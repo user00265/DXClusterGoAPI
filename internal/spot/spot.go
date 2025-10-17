@@ -21,7 +21,7 @@ type Info struct {
 type Spot struct {
 	Spotter   string    `json:"spotter"`
 	Spotted   string    `json:"spotted"`
-	Frequency float64   `json:"frequency"` // In MHz
+	Frequency int64     `json:"frequency"` // In Hz (canonical storage unit)
 	Message   string    `json:"message"`
 	When      time.Time `json:"when"`
 	Source    string    `json:"source"` // e.g., "DXCluster", "SOTA", "pota"
@@ -101,7 +101,7 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 	// Build the output structure - single variables first, then objects
 	// Single variables: spotter, spotted, frequency, band, message, when, source
 	// Objects: dxcc_spotter, dxcc_spotted (contain pota_ref and pota_mode)
-	// Frequency output is integer kHz (inputs can be string, int, or float)
+	// Frequency output is integer kHz (stored internally as Hz)
 	output := struct {
 		Spotter     string    `json:"spotter"`
 		Spotted     string    `json:"spotted"`
@@ -115,7 +115,7 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 	}{
 		Spotter:     s.Spotter,
 		Spotted:     s.Spotted,
-		Frequency:   int(s.Frequency * 1000), // Convert MHz to kHz integer (14.272 MHz -> 14272)
+		Frequency:   int(s.Frequency / 1000), // Convert Hz to kHz integer (14250000 Hz -> 14250)
 		Band:        s.Band,
 		Message:     s.Message,
 		When:        s.When,

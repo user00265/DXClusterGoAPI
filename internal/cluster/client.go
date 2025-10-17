@@ -33,7 +33,7 @@ const (
 type Spot struct {
 	Spotter   string    `json:"spotter"`
 	Spotted   string    `json:"spotted"`
-	Frequency float64   `json:"frequency"` // In kHz (original format)
+	Frequency int64     `json:"frequency"` // In Hz (canonical storage unit)
 	Message   string    `json:"message"`
 	When      time.Time `json:"when"`
 	Source    string    `json:"source"` // Name of the cluster it came from (e.g., "DXCluster", "SOTA")
@@ -498,9 +498,11 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 			return
 		}
 
+		// Normalize callsigns: remove system suffixes like "-#" that aren't part of the actual callsign
+		spotter = utils.NormalizeCallsign(spotter)
+		spotted = utils.NormalizeCallsign(spotted)
+
 		// Validate required fields before creating spot
-		spotter = strings.TrimSpace(spotter)
-		spotted = strings.TrimSpace(spotted)
 		if spotter == "" {
 			logging.Warn("DX cluster spot rejected: missing spotter callsign. line=%q source=%s", dxString, c.cfg.Host)
 			return
@@ -513,7 +515,7 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 		sp := Spot{
 			Spotter:   spotter,
 			Spotted:   spotted,
-			Frequency: frequency, // Frequency in kHz from cluster (matching original format)
+			Frequency: frequency, // Frequency in Hz (canonical storage unit)
 			Message:   strings.TrimSpace(message),
 			When:      time.Now().UTC(), // Use current UTC for spot reception time
 			Source: func() string {
@@ -525,11 +527,11 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 		}
 
 		// Detect band from frequency for logging
-		band := utils.BandFromFreq(frequency)
+		band := utils.BandFromFreq(float64(frequency))
 
 		c.safeSendSpot(sp)
-		logging.Info("DX cluster emitted spot: spotted=%s spotter=%s freq=%.3f band=%s timestamp=%s msg=%q source=%s",
-			sp.Spotted, sp.Spotter, sp.Frequency, band, sp.When.Format(time.RFC3339), sp.Message, sp.Source)
+		logging.Info("DX cluster emitted spot: spotted=%s spotter=%s freq=%s band=%s timestamp=%s msg=%q source=%s",
+			sp.Spotted, sp.Spotter, utils.FormatFrequency(sp.Frequency), band, sp.When.Format(time.RFC3339), sp.Message, sp.Source)
 
 		// Start initial heartbeat test after first spot
 		c.statusMutex.Lock()
@@ -546,16 +548,10 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 	}
 }
 
-// parseFrequency converts a frequency string to float64, handling potential commas as decimal points.
-// DX clusters typically send kHz, so we preserve the original kHz values.
-func ParseFrequency(freqStr string) (float64, error) {
-	freqStr = strings.ReplaceAll(freqStr, ",", ".") // Ensure decimal is a dot
-	freq, err := strconv.ParseFloat(freqStr, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid frequency format '%s': %w", freqStr, err)
-	}
-	// Keep original kHz values to match original application format
-	return freq, nil
+// parseFrequency converts a frequency string to int64 Hz.
+// DX clusters typically send kHz, auto-detected by utils.ParseFrequency.
+func ParseFrequency(freqStr string) (int64, error) {
+	return utils.ParseFrequency(freqStr)
 }
 
 // Helper safe senders: recover from panic if channel was closed concurrently
