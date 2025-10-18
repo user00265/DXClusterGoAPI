@@ -33,11 +33,11 @@ jobs:
     - name: Run tests with coverage
       run: go test -v -coverprofile=coverage.out ./...
 
-    - name: SonarCloud Scan
+    - name: SonarQube Scan
       uses: SonarSource/sonarqube-scan-action@v6
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         args: >
           -Dsonar.projectKey=user00265_DXClusterGoAPI
