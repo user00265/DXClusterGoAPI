@@ -79,7 +79,10 @@ func NewSQLiteClient(dataDir, dbName string) (*SQLiteClient, error) {
 	walPath := dbPath + "-wal"
 	if _, err := os.Stat(walPath); os.IsNotExist(err) {
 		if f, ferr := os.OpenFile(walPath, os.O_CREATE|os.O_WRONLY, 0644); ferr == nil {
-			f.Close()
+			if cerr := f.Close(); cerr != nil {
+				// Log close errors but don't fail; WAL file creation is not critical
+				fmt.Printf("Warning: failed to close WAL file %s: %v\n", walPath, cerr)
+			}
 		}
 	}
 
