@@ -611,7 +611,7 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 		}
 	}
 	if err != nil {
-		logging.Warn("Club Log download failed after retries: %v. Falling back to GitHub URL.", err)
+		logging.Warn("Club Log download failed after retries: %v. Falling back to alternate DXCC source.", err)
 		// Fallback to GitHub
 		// Use Config override for fallback if present
 		fallback := config.FallbackGitHubURL
@@ -691,7 +691,7 @@ func (c *Client) fetchAndStoreData(ctx context.Context) {
 func (c *Client) downloadGzippedXML(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request for %s: %w", url, err)
+		return nil, fmt.Errorf("failed to create HTTP request for DXCC source: %w", err)
 	}
 	req.Header.Set("User-Agent", version.UserAgent)
 
@@ -703,18 +703,18 @@ func (c *Client) downloadGzippedXML(ctx context.Context, url string) ([]byte, er
 		resp, err = c.httpClient.Do(req)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("HTTP request to %s failed: %w", url, err)
+		return nil, fmt.Errorf("HTTP request to DXCC source failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download from %s returned non-OK status: %s", url, resp.Status)
+		return nil, fmt.Errorf("download from DXCC source returned non-OK status: %s", resp.Status)
 	}
 
 	// Read the whole response body first. If it's gzipped (magic header), decompress it.
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read data from %s: %w", url, err)
+		return nil, fmt.Errorf("failed to read DXCC data from source: %w", err)
 	}
 
 	// If the data starts with gzip magic, decompress it.

@@ -249,7 +249,7 @@ func (c *Client) StopUpdater() {
 
 // fetchAndStoreUsers downloads the CSV, parses it, and replaces data in the database.
 func (c *Client) fetchAndStoreUsers(ctx context.Context) error {
-	logging.Info("Fetching LoTW CSV from %s", config.LoTWActivityURL)
+	logging.Info("Fetching LoTW user activity data")
 	req, err := http.NewRequestWithContext(ctx, "GET", config.LoTWActivityURL, nil)
 	if err != nil {
 		logging.Error("Failed to create HTTP request for LoTW CSV: %v", err)
