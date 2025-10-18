@@ -65,3 +65,23 @@ func NewClient(ctx context.Context, cfg config.RedisConfig) (*Client, error) {
 var NewRedisClient = func(opt *redis.Options) *redis.Client {
 	return redis.NewClient(opt)
 }
+
+// IsConnected checks if the Redis client is connected and responsive.
+func (c *Client) IsConnected(ctx context.Context) bool {
+	if c == nil || c.Client == nil {
+		return false
+	}
+	_, err := c.Ping(ctx).Result()
+	return err == nil
+}
+
+// HealthStatus returns a string describing the current health of the Redis connection.
+func (c *Client) HealthStatus(ctx context.Context) string {
+	if c == nil || c.Client == nil {
+		return "unavailable (not initialized)"
+	}
+	if c.IsConnected(ctx) {
+		return "connected"
+	}
+	return "disconnected"
+}

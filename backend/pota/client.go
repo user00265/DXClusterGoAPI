@@ -298,10 +298,15 @@ func NewClient(ctx context.Context, cfg config.Config, rdb *redisclient.Client) 
 
 	client.HTTPClient = client.httpClient
 
-	// Choose tracking mechanism
-	if cfg.Redis.Enabled && rdb != nil {
-		client.tracker = NewRedisSpotTracker(rdb, cfg.Redis.SpotExpiry)
-		logging.Notice("POTA client using Redis tracker with expiry: %s", cfg.Redis.SpotExpiry)
+	// Choose tracking mechanism with fallback support
+	if cfg.Redis.Enabled {
+		// Use FallbackSpotTracker even if rdb is nil (graceful degradation)
+		client.tracker = NewFallbackSpotTracker(rdb, cfg.MaxCache, cfg.Redis.SpotExpiry)
+		if rdb != nil {
+			logging.Notice("POTA client using Redis tracker with fallback to in-memory (expiry: %s)", cfg.Redis.SpotExpiry)
+		} else {
+			logging.Warn("POTA client: Redis enabled but not available. Using in-memory tracker with fallback support.")
+		}
 	} else {
 		client.tracker = NewInMemorySpotTracker(cfg.MaxCache) // Use MaxCache as a proxy for in-memory size
 		logging.Info("POTA client using in-memory tracker (max %d spots).", cfg.MaxCache)

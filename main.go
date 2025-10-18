@@ -149,10 +149,12 @@ func RunApplication(ctx context.Context, args []string) int {
 	if cfg.Redis.Enabled {
 		rdb, err = redisclient.NewClient(ctx, cfg.Redis)
 		if err != nil {
-			log.Fatalf("FATAL: Failed to initialize Redis client: %v\n", err)
+			logging.Warn("Redis client initialization failed: %v. Continuing without Redis (in-memory mode).", err)
+			rdb = nil
+		} else {
+			defer rdb.Close()
+			logging.Notice("Redis client initialized and connected.")
 		}
-		defer rdb.Close()
-		logging.Notice("Redis client initialized and connected.")
 	}
 
 	// --- 3. Initialize LoTW Client ---
