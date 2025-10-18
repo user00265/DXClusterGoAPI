@@ -102,7 +102,9 @@ func NewClient(cfg config.ClusterConfig) (*Client, error) {
 	// Allow the message portion to be empty (non-greedy), since some servers
 	// emit DX lines without an explicit message before the timestamp.
 	// Allow underscore in tokens (some servers emit PASSWORD_OK or similar tokens)
-	dxDelimRegex := regexp.MustCompile(`^(DX de) +([A-Z0-9_\/\-#]{3,}):? *([0-9]+(?:\.[0-9]+)?) +([A-Z0-9_\/\-#]{3,}) *(.*?) +(\d{4})Z *([A-Z]{2}\d{2})?`)
+	// More flexible with spacing: spotter can have optional space before colon,
+	// and we use \s+ to match any whitespace between elements.
+	dxDelimRegex := regexp.MustCompile(`^(DX de) +([A-Z0-9_\/\-#]{3,}) *:? *([0-9]+(?:\.[0-9]+)?) +([A-Z0-9_\/\-#]{3,}) *(.*?)\s+(\d{4})Z\s*([A-Z]{2}\d{2})?`)
 
 	// determine buffer size: prefer per-cluster config, fall back to
 	// DXC_CHANNEL_BUFFER env var, then to a conservative default of 32.
