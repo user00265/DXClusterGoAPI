@@ -123,6 +123,15 @@ type Config struct {
 	FallbackGitHubURL string
 	// Default channel buffer for DX cluster clients (overridable per-cluster config)
 	DXCChannelBuffer int `env:"DXC_CHANNEL_BUFFER" envDefault:"32"`
+
+	// Proxy Configuration for X-Forwarded-For header handling
+	// TRUSTED_PROXIES: comma-separated list of trusted proxy IPs or CIDR ranges (e.g., "192.168.1.0/24,10.0.0.5")
+	// If not set, X-Forwarded-For header is ignored
+	TrustedProxies string `env:"TRUSTED_PROXIES" envDefault:""`
+	// REMOTE_IP_HEADER: the header name to use for remote IP extraction (default: X-Forwarded-For)
+	RemoteIPHeader string `env:"REMOTE_IP_HEADER" envDefault:"X-Forwarded-For"`
+	// REMOTE_IP_INVERT: if false (default), picks the LAST IP in the header; if true, picks the FIRST IP
+	RemoteIPInvert bool `env:"REMOTE_IP_INVERT" envDefault:"false"`
 }
 
 // LoadConfig loads configuration from environment variables.

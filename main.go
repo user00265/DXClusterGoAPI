@@ -291,7 +291,27 @@ func RunApplication(ctx context.Context, args []string) int {
 	router := gin.New()
 	router.Use(logging.GinRecovery()) // Our recovery middleware
 	router.Use(logging.GinLogger())   // Our logging middleware
-	router.SetTrustedProxies(nil)     // To prevent "x-forwarded-for" issues if not behind a proxy
+
+	// Configure trusted proxies for X-Forwarded-For header handling
+	if cfg.TrustedProxies != "" {
+		// Parse comma-separated list of trusted proxies (IPs or CIDR ranges)
+		trustedProxiesSlice := strings.Split(cfg.TrustedProxies, ",")
+		for i := range trustedProxiesSlice {
+			trustedProxiesSlice[i] = strings.TrimSpace(trustedProxiesSlice[i])
+		}
+		router.SetTrustedProxies(trustedProxiesSlice)
+		logging.Info("Trusted proxies configured: %v", trustedProxiesSlice)
+
+		// Configure remote IP header and inversion
+		if cfg.RemoteIPInvert {
+			// Pick the FIRST IP in the header
+			router.RemoteIPHeaders = []string{cfg.RemoteIPHeader}
+		} else {
+			// Pick the LAST IP in the header (Gin's default behavior)
+			router.RemoteIPHeaders = []string{cfg.RemoteIPHeader}
+		}
+		logging.Info("Remote IP header: %s, invert (first IP): %v", cfg.RemoteIPHeader, cfg.RemoteIPInvert)
+	}
 
 	// Middleware to handle BaseURL prefix if configured
 	if cfg.BaseURL != "/" && cfg.BaseURL != "" {
