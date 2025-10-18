@@ -41,3 +41,12 @@ jobs:
       uses: github/codeql-action/analyze@v4
       with:
         category: "/language:${{ matrix.language }}"
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: ./coverage.out
+        flags: unittests
+        fail_ci_if_error: false
+        verbose: true
