@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -54,16 +55,33 @@ func DisableColors() {
 }
 
 // formatLog formats a log message with timestamp, colored level (3-letter), and message
+// Sanitizes the message to prevent log injection (e.g., from user-controlled input like DX cluster data)
 func formatLog(levelAbbrev, color, message string) string {
 	timestamp := time.Now().Format(TimeFormat)
 
+	// Sanitize message: escape newlines and carriage returns to prevent log forging
+	// Replace with visible escape sequences so data is not lost, but injection is prevented
+	sanitized := sanitizeLogMessage(message)
+
 	if UseColors {
 		// Format: "Oct 14 13:16:37.788 INF message"
-		return fmt.Sprintf("%s %s%s%s %s", timestamp, color, levelAbbrev, colorReset, message)
+		return fmt.Sprintf("%s %s%s%s %s", timestamp, color, levelAbbrev, colorReset, sanitized)
 	}
 
 	// No colors
-	return fmt.Sprintf("%s %s %s", timestamp, levelAbbrev, message)
+	return fmt.Sprintf("%s %s %s", timestamp, levelAbbrev, sanitized)
+}
+
+// sanitizeLogMessage escapes problematic characters in log messages to prevent log injection
+// Specifically escapes newlines and carriage returns that could forge new log entries
+func sanitizeLogMessage(msg string) string {
+	// Replace problematic characters with visible escape sequences
+	result := strings.NewReplacer(
+		"\n", "\\n",
+		"\r", "\\r",
+		"\t", "\\t",
+	).Replace(msg)
+	return result
 }
 
 // Crit logs critical errors (application should stop)
