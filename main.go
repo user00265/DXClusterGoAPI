@@ -305,14 +305,10 @@ func RunApplication(ctx context.Context, args []string) int {
 		logging.Info("Trusted proxies configured: %v", trustedProxiesSlice)
 
 		// Configure remote IP header and inversion
-		if cfg.RemoteIPInvert {
-			// Pick the FIRST IP in the header
+		if cfg.RemoteIPHeader != "" {
 			router.RemoteIPHeaders = []string{cfg.RemoteIPHeader}
-		} else {
-			// Pick the LAST IP in the header (Gin's default behavior)
-			router.RemoteIPHeaders = []string{cfg.RemoteIPHeader}
+			logging.Info("Remote IP header: %s, invert (first IP): %v", cfg.RemoteIPHeader, cfg.RemoteIPInvert)
 		}
-		logging.Info("Remote IP header: %s, invert (first IP): %v", cfg.RemoteIPHeader, cfg.RemoteIPInvert)
 	}
 
 	// Middleware to handle BaseURL prefix if configured
