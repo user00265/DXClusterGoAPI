@@ -133,7 +133,7 @@ func RunApplication(ctx context.Context, args []string) int {
 	// Perform cleanup for clients that were not closed by gracefulShutdown
 	logging.Info("Performing final client cleanup...")
 	lotwClient.StopUpdater()
-	if err := lotwClient.dbClient.Close(); err != nil {
+	if err := lotwClient.DbClient.Close(); err != nil {
 		logging.Error("Error closing LoTW DB client: %v", err)
 	}
 	if err := dxccClient.Close(); err != nil {
@@ -543,7 +543,6 @@ func spotAggregator(ctx context.Context, spotChannels []<-chan spot.Spot, cache 
 			if verbose {
 				logging.Debug("Aggregator added enhanced spot from %s (spotter=%s)", enhancedSpot.Source, enhancedSpot.Spotter)
 			}
-		}
 		}
 	}
 }

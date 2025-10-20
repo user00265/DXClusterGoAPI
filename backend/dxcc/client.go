@@ -234,13 +234,14 @@ func NewClient(ctx context.Context, cfg config.Config, dbClient db.DBClient) (*C
 }
 
 // Close gracefully shuts down the DXCC client's resources.
-func (c *Client) Close() {
+func (c *Client) Close() error {
 	if c.updateStop != nil {
 		close(c.updateStop)
 		<-c.updateDone
 		c.updateStop = nil
 		c.updateDone = nil
 	}
+	return c.dbClient.Close()
 }
 
 // createTables creates the DXCC tables if they don't exist.
