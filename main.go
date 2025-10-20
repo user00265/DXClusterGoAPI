@@ -76,13 +76,11 @@ func RunApplication(ctx context.Context, args []string) int {
 	if err != nil {
 		return 1
 	}
-	defer lotwClient.StopUpdater()
 
 	dxccClient, err := initializeDXCC(ctx, cfg)
 	if err != nil {
 		return 1
 	}
-	defer dxccClient.Close()
 
 	logging.Notice("DXCC and LoTW data loaded. Ready to initialize spot sources and HTTP API.")
 
@@ -130,7 +128,19 @@ func RunApplication(ctx context.Context, args []string) int {
 	go statusReporter(ctx, startupTime, cfg, centralSpotCache)
 
 	// Graceful shutdown
-	return gracefulShutdown(ctx, srv, dxClusterClients, dxClusterHosts)
+	status := gracefulShutdown(ctx, srv, dxClusterClients, dxClusterHosts)
+
+	// Perform cleanup for clients that were not closed by gracefulShutdown
+	logging.Info("Performing final client cleanup...")
+	lotwClient.StopUpdater()
+	if err := lotwClient.dbClient.Close(); err != nil {
+		logging.Error("Error closing LoTW DB client: %v", err)
+	}
+	if err := dxccClient.Close(); err != nil {
+		logging.Error("Error closing DXCC client: %v", err)
+	}
+
+	return status
 }
 
 // setupLogging applies LOG_LEVEL environment variable to logging system
@@ -225,7 +235,6 @@ func initializeLoTW(ctx context.Context, cfg *config.Config) (*lotw.Client, erro
 	if err != nil {
 		log.Fatalf("FATAL: Failed to initialize LoTW DB client: %v\n", err)
 	}
-	defer lotwDBClient.Close()
 
 	lotwClient, err := lotw.NewClient(ctx, *cfg, lotwDBClient)
 	if err != nil {
@@ -260,7 +269,6 @@ func initializeDXCC(ctx context.Context, cfg *config.Config) (*dxcc.Client, erro
 	if err != nil {
 		log.Fatalf("FATAL: Failed to initialize DXCC DB client: %v\n", err)
 	}
-	defer dxccDBClient.Close()
 
 	dxccClient, err := dxcc.NewClient(ctx, *cfg, dxccDBClient)
 	if err != nil {
@@ -535,6 +543,7 @@ func spotAggregator(ctx context.Context, spotChannels []<-chan spot.Spot, cache 
 			if verbose {
 				logging.Debug("Aggregator added enhanced spot from %s (spotter=%s)", enhancedSpot.Source, enhancedSpot.Spotter)
 			}
+		}
 		}
 	}
 }
