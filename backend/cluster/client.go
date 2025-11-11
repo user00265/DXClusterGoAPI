@@ -179,7 +179,8 @@ func (c *Client) Connect(ctx context.Context) {
 		expBackoff := backoff.NewExponentialBackOff()
 		expBackoff.InitialInterval = 500 * time.Millisecond
 		expBackoff.MaxInterval = 2 * time.Second
-		expBackoff.MaxElapsedTime = 10 * time.Second // Keep tests fast; allow some retries then give up
+		// Retry indefinitely to keep connections online; Close() cancels via context
+		expBackoff.MaxElapsedTime = 0
 		expBackoff.Multiplier = 1.5
 
 		// Use backoff.WithContext so retries abort immediately when parent ctx is cancelled
@@ -233,6 +234,8 @@ func (c *Client) connectOnce(ctx context.Context) error {
 
 	// Wait for the readLoop to complete (wait on local variable to avoid races)
 	<-doneCh
+	// Ensure any goroutines tied to readLoopCtx (e.g., heartbeat) are stopped
+	cancel()
 
 	c.statusMutex.Lock()
 	c.isConnected = false
@@ -696,6 +699,11 @@ func (c *Client) startRegularHeartbeat(ctx context.Context) {
 
 				if err := c.write(ctx, "PING"); err != nil {
 					logging.Warn("Failed to send PING #%d to %s:%s: %v", pingNum, c.cfg.Host, c.cfg.Port, err)
+					// If we're no longer connected, stop the heartbeat goroutine to avoid log spam.
+					if strings.Contains(err.Error(), "not connected") {
+						logging.Info("Stopping regular heartbeat for %s:%s: connection inactive", c.cfg.Host, c.cfg.Port)
+						return
+					}
 				} else {
 					logging.Debug("Sent PING #%d to %s:%s", pingNum, c.cfg.Host, c.cfg.Port)
 				}
