@@ -71,6 +71,11 @@ type Client struct {
 	// Ensure SpotChan is closed exactly once on Close()
 	spotCloseOnce sync.Once
 	chanCloseOnce sync.Once
+
+	// Track disconnection time for extended outages
+	disconnectTime      time.Time
+	extendedDisconnect  bool
+	disconnectTimeMutex sync.RWMutex
 }
 
 // NewClient creates and returns a new DXCluster client for a single connection.
@@ -158,11 +163,45 @@ func (c *Client) Connect(ctx context.Context) {
 			}
 			c.statusMutex.Unlock()
 		}()
+		
+		// Initialize disconnection tracking
+		c.disconnectTimeMutex.Lock()
+		c.disconnectTime = time.Time{} // Zero time = not disconnected yet
+		c.extendedDisconnect = false
+		c.disconnectTimeMutex.Unlock()
+		
 		op := func() error {
+			// Check if we've been disconnected for >= 1 hour
+			c.disconnectTimeMutex.RLock()
+			disconnectTime := c.disconnectTime
+			extendedDisconnect := c.extendedDisconnect
+			c.disconnectTimeMutex.RUnlock()
+			
+			if !disconnectTime.IsZero() && time.Since(disconnectTime) >= 1*time.Hour && !extendedDisconnect {
+				c.disconnectTimeMutex.Lock()
+				c.extendedDisconnect = true
+				c.disconnectTimeMutex.Unlock()
+				logging.Notice("Extended disconnection detected for %s:%s (>= 1 hour). Setting retry interval to 1 hour.", c.cfg.Host, c.cfg.Port)
+			}
+			
+			// If we've been in extended disconnect mode, notify before attempting reconnect
+			c.disconnectTimeMutex.RLock()
+			if c.extendedDisconnect {
+				logging.Notice("Attempting to reconnect to %s:%s after extended disconnection...", c.cfg.Host, c.cfg.Port)
+			}
+			c.disconnectTimeMutex.RUnlock()
+			
 			// Use the derived connectCtx so that cancelling the connect loop
 			// via c.connectCancel() properly halts connection attempts.
 			err := c.connectOnce(connectCtx)
 			if err != nil {
+				// Record disconnect time if this is the first failure
+				c.disconnectTimeMutex.Lock()
+				if c.disconnectTime.IsZero() {
+					c.disconnectTime = time.Now()
+				}
+				c.disconnectTimeMutex.Unlock()
+				
 				// Do not notify listeners when the failure was caused by context
 				// cancellation or deadline expiry: tests cancel contexts to
 				// signal shutdown and do not expect an error to be emitted in
@@ -171,11 +210,22 @@ func (c *Client) Connect(ctx context.Context) {
 					return err
 				}
 				c.safeSendError(fmt.Errorf("failed to connect to %s:%s: %w", c.cfg.Host, c.cfg.Port, err))
+			} else {
+				// Connection successful - reset disconnect tracking
+				c.disconnectTimeMutex.Lock()
+				wasExtendedDisconnect := c.extendedDisconnect
+				c.disconnectTime = time.Time{}
+				c.extendedDisconnect = false
+				c.disconnectTimeMutex.Unlock()
+				
+				if wasExtendedDisconnect {
+					logging.Notice("Successfully reconnected to %s:%s after extended disconnection.", c.cfg.Host, c.cfg.Port)
+				}
 			}
 			return err
 		}
 
-		// Exponential backoff for reconnection
+		// Exponential backoff for reconnection with custom NextBackOff function
 		expBackoff := backoff.NewExponentialBackOff()
 		expBackoff.InitialInterval = 500 * time.Millisecond
 		expBackoff.MaxInterval = 2 * time.Second
@@ -183,8 +233,14 @@ func (c *Client) Connect(ctx context.Context) {
 		expBackoff.MaxElapsedTime = 0
 		expBackoff.Multiplier = 1.5
 
+		// Wrap the backoff to implement extended disconnect logic
+		customBackoff := &extendedDisconnectBackoff{
+			wrapped: expBackoff,
+			client:  c,
+		}
+
 		// Use backoff.WithContext so retries abort immediately when parent ctx is cancelled
-		err := backoff.Retry(op, backoff.WithContext(expBackoff, connectCtx))
+		err := backoff.Retry(op, backoff.WithContext(customBackoff, connectCtx))
 		if err != nil {
 			// If the connect loop ended because the context was cancelled or
 			// the deadline was exceeded, don't report a permanent failure as
@@ -721,3 +777,31 @@ func (c *Client) startRegularHeartbeat(ctx context.Context) {
 		}
 	}()
 }
+
+// extendedDisconnectBackoff wraps a backoff.BackOff to implement extended disconnect logic
+type extendedDisconnectBackoff struct {
+	wrapped backoff.BackOff
+	client  *Client
+}
+
+// NextBackOff returns the next backoff duration, with special handling for extended disconnects
+func (e *extendedDisconnectBackoff) NextBackOff() time.Duration {
+	e.client.disconnectTimeMutex.RLock()
+	extendedDisconnect := e.client.extendedDisconnect
+	disconnectTime := e.client.disconnectTime
+	e.client.disconnectTimeMutex.RUnlock()
+
+	// If we're in extended disconnect mode (>= 1 hour), use 1 hour interval
+	if extendedDisconnect && !disconnectTime.IsZero() && time.Since(disconnectTime) >= 1*time.Hour {
+		return 1 * time.Hour
+	}
+
+	// Otherwise, use the wrapped backoff strategy
+	return e.wrapped.NextBackOff()
+}
+
+// Reset resets the backoff to its initial state
+func (e *extendedDisconnectBackoff) Reset() {
+	e.wrapped.Reset()
+}
+
