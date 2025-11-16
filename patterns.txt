@@ -1,0 +1,33 @@
+# DX Cluster Line Parsing Test Patterns
+# 
+# This file contains real DX cluster lines that have failed to parse in production.
+# These patterns are used to validate and improve the DX cluster line parser regex.
+# 
+# Format: Each line is a raw DX cluster message as received from the server.
+# When creating unit tests, use these to ensure the parser handles edge cases:
+#   - Variations in whitespace (multiple spaces, tabs, etc.)
+#   - Different formatting of spotter/spotted callsigns
+#   - Optional message fields
+#   - Colon placement variations
+#   - Locator code presence/absence
+# 
+# Date collected: 2025-10-18
+# Source: Production logs from multiple DX clusters
+# 
+# Pattern variations found:
+# - Spotter with space before colon: "W4BEE :"
+# - Multiple spaces between frequency and spotted call
+# - Empty or minimal message before timestamp
+# - Excess trailing spaces before timestamp
+#
+
+DX de VE1SKY:   144174.0  TU           Jeff -12                       1220Z
+DX de SMS:       28385.0  TF3EK
+DX de PS7BZ:     21248.0  CQ           JOTA  USB                      1642Z
+DX de W4BEE :   146520.0  W4BEE        W4C/EM-066                     1800Z
+DX de W4BEE :    18137.0  W4BEE        W4C/EM-066                     1818Z
+DX de W4BEE :    14259.0  W4BEE        W4C/EM-066                     1835Z
+DX de W4BEE :    21360.0  W4BEE        W4C/EM-066                     1841Z
+DX de W4BEE :    28381.0  W4BEE        W4C/EM-066                     1853Z
+DX de OK2IT:      3796.0  I            am cheating agn with sdr RX!   1522Z
+DX de OK2IT:      3796.0  I            am cheating agn with sdr RX!   1522Z

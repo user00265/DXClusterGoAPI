@@ -109,6 +109,7 @@ func NewClient(cfg config.ClusterConfig) (*Client, error) {
 	// Allow underscore in tokens (some servers emit PASSWORD_OK or similar tokens)
 	// More flexible with spacing: spotter can have optional space before colon,
 	// and we use \s+ to match any whitespace between elements.
+	// Token length requires 3+ chars to avoid matching noise (original behavior).
 	dxDelimRegex := regexp.MustCompile(`^(DX de) +([A-Z0-9_\/\-#]{3,}) *:? *([0-9]+(?:\.[0-9]+)?) +([A-Z0-9_\/\-#]{3,}) *(.*?)\s+(\d{4})Z\s*([A-Z]{2}\d{2})?`)
 
 	// determine buffer size: prefer per-cluster config, fall back to
@@ -540,17 +541,28 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 		logging.Debug("DX cluster parsing DX line: %q", dxString)
 		m := c.dxDelimRegex.FindStringSubmatch(dxString)
 		logging.Debug("DX cluster regex matched %d groups", len(m))
-		if len(m) < 5 { // Expecting at least up to the spotted call
-			c.safeSendError(fmt.Errorf("failed to parse DX string '%s' from %s", dxString, c.cfg.Host))
-			c.safeSendMessage(dxString)
-			logging.Warn("DX cluster failed to parse DX line, emitting as generic message: %q", dxString)
-			return
-		}
 
-		spotter := m[2]
-		spotted := m[4]
-		freqStr := m[3]
-		message := m[5]
+		var spotter, spotted, freqStr, message string
+
+		if len(m) < 5 { // Strict regex failed; try lenient parser
+			logging.Debug("DX cluster strict regex failed for %q, trying lenient parser", dxString)
+			var success bool
+			spotter, spotted, freqStr, message, success = tryLenientParseDX(dxString)
+			if !success {
+				// Both strict and lenient parsing failed
+				c.safeSendError(fmt.Errorf("failed to parse DX string '%s' from %s", dxString, c.cfg.Host))
+				c.safeSendMessage(dxString)
+				logging.Warn("DX cluster failed to parse DX line (strict and lenient), emitting as generic message: %q", dxString)
+				return
+			}
+			logging.Debug("DX cluster lenient parser succeeded for %q", dxString)
+		} else {
+			// Strict regex succeeded
+			spotter = m[2]
+			spotted = m[4]
+			freqStr = m[3]
+			message = m[5]
+		}
 
 		frequency, err := ParseFrequency(freqStr)
 		if err != nil {
@@ -613,6 +625,48 @@ func (c *Client) parseDX(ctx context.Context, dxString string) {
 // DX clusters typically send kHz, auto-detected by utils.ParseFrequency.
 func ParseFrequency(freqStr string) (int64, error) {
 	return utils.ParseFrequency(freqStr)
+}
+
+// tryLenientParseDX attempts to parse a DX line using a more tolerant regex
+// when the strict parser fails. Returns (spotter, spotted, freqStr, message, success).
+// This allows handling unusual or malformed DX lines from edge-case clusters.
+// IMPORTANT: Both spotter and spotted must parse as valid callsigns (core B part must be 3+ chars)
+// and frequency must look valid (numeric). This validates the semantic correctness of the spot.
+func tryLenientParseDX(dxString string) (string, string, string, string, bool) {
+	// Lenient regex: allows shorter tokens (1+ chars) and more flexible spacing.
+	// This is a fallback for lines that don't match the strict format.
+	lenientRegex := regexp.MustCompile(`^(DX de)\s+([A-Z0-9_\/\-#]+)\s*:?\s*([0-9]+(?:\.[0-9]+)?)\s+([A-Z0-9_\/\-#]+)\s*(.*?)\s+(\d{4})Z`)
+	m := lenientRegex.FindStringSubmatch(dxString)
+	if len(m) < 5 { // Need at least groups: full match, DX de, spotter, freq, spotted
+		return "", "", "", "", false
+	}
+
+	spotter := m[2]
+	freqStr := m[3]
+	spotted := m[4]
+	message := ""
+	if len(m) > 5 {
+		message = m[5]
+	}
+
+	// Validate that both spotter and spotted are valid callsigns.
+	// ParseCallsign requires the core B part (main callsign) to be 3+ alphanumeric chars.
+	// This rejects invalid entries like "I" (single character).
+	spotterParsed := utils.ParseCallsign(spotter)
+	spottedParsed := utils.ParseCallsign(spotted)
+
+	// Core callsign (B part) must be 3+ characters to be considered valid.
+	// This ensures we don't accept noise like "I" as a valid spotted callsign.
+	if len(spotterParsed.B) < 3 || len(spottedParsed.B) < 3 {
+		return "", "", "", "", false
+	}
+
+	// Frequency validation: ensure it's a valid number (already validated by regex pattern)
+	if freqStr == "" {
+		return "", "", "", "", false
+	}
+
+	return spotter, spotted, freqStr, message, true
 }
 
 // Helper safe senders: recover from panic if channel was closed concurrently
