@@ -85,8 +85,10 @@ func TestNewClient_Success(t *testing.T) {
 	defer func() { NewRedisClient = orig }()
 
 	client := &Client{Redis: &mockGoRedisClient{pingErr: nil}}
-	if client == nil {
-		t.Fatal("expected client, got nil")
+	// client is constructed directly and therefore cannot be nil; assert
+	// that the underlying Redis mock reports a healthy connection instead.
+	if !client.IsConnected(context.Background()) {
+		t.Fatal("expected client to be connected")
 	}
 
 }
