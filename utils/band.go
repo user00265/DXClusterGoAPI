@@ -1,7 +1,13 @@
 package utils
 
+import (
+	"strconv"
+	"strings"
+)
+
 // BandFromFreq converts a frequency to a ham radio band string.
 // Accepts frequency in Hz (int64), kHz, or MHz and automatically detects the unit.
+// Also accepts string representations of frequencies.
 func BandFromFreq(frequency interface{}) string {
 	// Convert to float64 for calculation
 	var freqFloat float64
@@ -14,6 +20,13 @@ func BandFromFreq(frequency interface{}) string {
 		freqFloat = float64(v)
 	case int:
 		freqFloat = float64(v)
+	case string:
+		cleanStr := strings.ReplaceAll(v, ",", ".")
+		f, err := strconv.ParseFloat(cleanStr, 64)
+		if err != nil {
+			return "Unknown"
+		}
+		freqFloat = f
 	default:
 		return "Unknown"
 	}
