@@ -975,13 +975,22 @@ func (c *Client) replaceDataInDB(ctx context.Context, xmlData *CtyXML) error {
 		}
 	}
 
-	// --- Insert Exceptions ---
+	// --- Insert Exceptions (deduplicated) ---
+	// Use a map to deduplicate exceptions by (call, start, end, adif) key
+	exceptionMap := make(map[string]Exception)
+	for _, e := range xmlData.Exceptions.Exception {
+		key := fmt.Sprintf("%s|%s|%s|%d", e.Call, e.Start, e.End, e.ADIF)
+		if _, exists := exceptionMap[key]; !exists {
+			exceptionMap[key] = e
+		}
+	}
+
 	exceptionStmt, err := tx.PrepareContext(ctx, fmt.Sprintf("INSERT INTO %s (call, entity, adif, cqz, cont, long, lat, start, end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", exceptionsTableName))
 	if err != nil {
 		return fmt.Errorf("failed to prepare exception insert statement: %w", err)
 	}
 	defer exceptionStmt.Close()
-	for _, e := range xmlData.Exceptions.Exception {
+	for _, e := range exceptionMap {
 		start, end := parseTimeStrings(e.Start, e.End)
 		_, err = exceptionStmt.ExecContext(ctx, e.Call, e.Entity, e.ADIF, e.CQZ, e.Cont, e.Long, e.Lat, formatTimePtr(start), formatTimePtr(end))
 		if err != nil {

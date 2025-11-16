@@ -7,8 +7,14 @@ import (
 	"github.com/user00265/dxclustergoapi/backend/dxcc"
 )
 
+// DXCCLookupClient is an interface for DXCC lookup operations
+type DXCCLookupClient interface {
+	GetException(call string) (*dxcc.DxccInfo, bool)
+	GetPrefix(prefix string) (*dxcc.DxccInfo, bool)
+}
+
 // LookupDXCC performs DXCC entity lookup for a callsign.
-func LookupDXCC(call string, client *dxcc.Client) (*dxcc.DxccInfo, error) {
+func LookupDXCC(call string, client DXCCLookupClient) (*dxcc.DxccInfo, error) {
 	call = strings.ToUpper(strings.TrimSpace(call))
 
 	// Check exceptions first
