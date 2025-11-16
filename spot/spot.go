@@ -102,13 +102,14 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 	// Single variables: spotter, spotted, frequency, band, message, when, source
 	// Objects: dxcc_spotter, dxcc_spotted (contain pota_ref and pota_mode)
 	// Frequency output is integer kHz (stored internally as Hz)
+	// When is formatted with millisecond precision (RFC3339 with 3 decimal places)
 	output := struct {
 		Spotter     string    `json:"spotter"`
 		Spotted     string    `json:"spotted"`
 		Frequency   int       `json:"frequency"` // Integer kHz output (e.g., 14272)
 		Band        string    `json:"band"`
 		Message     string    `json:"message"`
-		When        time.Time `json:"when"`
+		When        string    `json:"when"`
 		Source      string    `json:"source,omitempty"`
 		DXCCSpotter *FlatInfo `json:"dxcc_spotter,omitempty"`
 		DXCCSpotted *FlatInfo `json:"dxcc_spotted,omitempty"`
@@ -118,7 +119,7 @@ func (s Spot) MarshalJSON() ([]byte, error) {
 		Frequency:   int(s.Frequency / 1000), // Convert Hz to kHz integer (14250000 Hz -> 14250)
 		Band:        s.Band,
 		Message:     s.Message,
-		When:        s.When,
+		When:        s.When.UTC().Format("2006-01-02T15:04:05.000Z07:00"), // Millisecond precision
 		Source:      s.Source,
 		DXCCSpotter: dxccSpotter,
 		DXCCSpotted: dxccSpotted,
