@@ -60,3 +60,5 @@ func GinRecovery() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// Build the query string if present
