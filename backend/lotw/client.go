@@ -82,7 +82,7 @@ func NewClient(ctx context.Context, cfg config.Config, dbClient db.DBClient) (*C
 	return client, nil
 }
 
-// createTable creates the lotw_users table if it doesn't exist.
+// createTable creates the lotw_users table if it doesn't exist, and handles schema migrations.
 func (c *Client) createTable() error {
 	queries := []string{
 		fmt.Sprintf(`
@@ -107,6 +107,98 @@ func (c *Client) createTable() error {
 			return fmt.Errorf("failed to execute query: %w\nQuery: %s", err, query)
 		}
 	}
+
+	// Handle schema migration: check if old schema with lotw_member column exists
+	if err := c.migrateSchema(db); err != nil {
+		return fmt.Errorf("failed to migrate schema: %w", err)
+	}
+
+	return nil
+}
+
+// migrateSchema handles schema migrations for existing databases.
+// If the old schema with lotw_member column is detected, it will be removed
+// since we now calculate days since upload dynamically.
+func (c *Client) migrateSchema(db *sql.DB) error {
+	// Check if the lotw_member column exists in the table
+	query := fmt.Sprintf("PRAGMA table_info(%s);", dbTableName)
+	rows, err := db.Query(query)
+	if err != nil {
+		return fmt.Errorf("failed to check table schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasLoTWMemberColumn := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var type_ string
+		var notnull int
+		var dfltValue interface{}
+		var pk int
+
+		if err := rows.Scan(&cid, &name, &type_, &notnull, &dfltValue, &pk); err != nil {
+			return fmt.Errorf("failed to scan column info: %w", err)
+		}
+
+		if name == "lotw_member" {
+			hasLoTWMemberColumn = true
+			break
+		}
+	}
+
+	// If old schema exists, recreate the table without the lotw_member column
+	if hasLoTWMemberColumn {
+		logging.Info("Detected old LoTW schema with lotw_member column. Migrating to new schema...")
+
+		// Create a temporary table with the new schema
+		tempTableName := dbTableName + "_new"
+		createTempQuery := fmt.Sprintf(`
+			CREATE TABLE %s (
+				callsign TEXT PRIMARY KEY,
+				last_upload_utc TEXT NOT NULL
+			);
+		`, tempTableName)
+
+		if _, err := db.Exec(createTempQuery); err != nil {
+			return fmt.Errorf("failed to create temporary table: %w", err)
+		}
+
+		// Copy data from old table to new table (only the columns that exist in new schema)
+		copyQuery := fmt.Sprintf(`
+			INSERT INTO %s (callsign, last_upload_utc)
+			SELECT callsign, last_upload_utc FROM %s;
+		`, tempTableName, dbTableName)
+
+		if _, err := db.Exec(copyQuery); err != nil {
+			// Clean up temporary table
+			db.Exec(fmt.Sprintf("DROP TABLE %s;", tempTableName))
+			return fmt.Errorf("failed to copy data to temporary table: %w", err)
+		}
+
+		// Drop old table
+		dropQuery := fmt.Sprintf("DROP TABLE %s;", dbTableName)
+		if _, err := db.Exec(dropQuery); err != nil {
+			// Clean up temporary table
+			db.Exec(fmt.Sprintf("DROP TABLE %s;", tempTableName))
+			return fmt.Errorf("failed to drop old table: %w", err)
+		}
+
+		// Rename temporary table to original name
+		renameQuery := fmt.Sprintf("ALTER TABLE %s RENAME TO %s;", tempTableName, dbTableName)
+		if _, err := db.Exec(renameQuery); err != nil {
+			return fmt.Errorf("failed to rename table: %w", err)
+		}
+
+		logging.Info("Successfully migrated LoTW schema to new version")
+
+		// Clear the download metadata so the data will be re-fetched with the new schema
+		clearMetadataQuery := fmt.Sprintf("DELETE FROM %s WHERE data_type = 'lotw';", metadataTableName)
+		if _, err := db.Exec(clearMetadataQuery); err != nil {
+			logging.Warn("Failed to clear LoTW metadata during migration: %v", err)
+		}
+	}
+
 	return nil
 }
 

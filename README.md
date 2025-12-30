@@ -79,11 +79,13 @@ All endpoints return JSON. Base URL: `http://x.x.x.x:8192`
   {
     "spotter": "W1AW",
     "spotted": "K7RA",
-    "frequency": 14250000,
+    "frequency": 14250,
     "message": "CQ DX",
-    "when": "2025-01-01T10:00:00Z",
+    "when": "2025-01-01T10:00:00.000Z",
     "source": "dx.n9jr.com",
     "band": "20m",
+    "mode": "phone",
+    "submode": "USB",
     "dxcc_spotter": {
       "cont": "NA",
       "entity": "United States",
@@ -92,8 +94,8 @@ All endpoints return JSON. Base URL: `http://x.x.x.x:8192`
       "cqz": "5",
       "ituz": "8",
       "lotw_user": false,
-      "lat": "39",
-      "lng": "-98"
+      "lat": "39.0",
+      "lng": "-98.0"
     },
     "dxcc_spotted": {
       "cont": "NA",
@@ -102,15 +104,21 @@ All endpoints return JSON. Base URL: `http://x.x.x.x:8192`
       "dxcc_id": "291",
       "cqz": "5",
       "ituz": "8",
-      "lotw_user": "2",
-      "lat": "39",
-      "lng": "-98"
+      "lotw_user": 2,
+      "lat": "39.0",
+      "lng": "-98.0"
     }
   }
 ]
 ```
 
-**Note:** `lotw_user` is `"2"` (string) if LoTW user, `false` (boolean) if not.
+**Note:** 
+- `frequency` is in kHz (integer, e.g., 14250)
+- `band` is calculated from frequency (e.g., "20m", "40m", "2m")
+- `mode` and `submode` are available for POTA spots; empty strings for DX Cluster spots
+- `cqz` (CQ Zone) and `ituz` (ITU Zone) are included in DXCC data
+- `lotw_user` is the number of days since last LoTW upload (integer) if a LoTW member, `false` (boolean) if not
+- `lat` and `lng` are strings with 1 decimal place precision
 
 ## Configuration
 

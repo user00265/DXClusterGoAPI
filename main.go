@@ -426,6 +426,9 @@ func forwardClusterSpots(ctx context.Context, client *cluster.Client, out chan<-
 				Message:   s.Message,
 				When:      s.When,
 				Source:    s.Source,
+				Band:      "",      // Will be calculated downstream
+				Mode:      "",      // Not available from cluster
+				Submode:   "",      // Not available from cluster
 			}:
 				logging.Info("CLUSTER [%s] FORWARDED SPOT #%d to aggregator", clusterHost, forwardedCount)
 			case <-ctx.Done():

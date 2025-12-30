@@ -465,6 +465,8 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 			Message:   potaSpot.Message,
 			When:      potaSpot.When,
 			Source:    potaSpot.Source,
+			Mode:      item.Mode,
+			Submode:   "", // POTA doesn't provide submode
 		}
 		unified.AdditionalData.PotaRef = potaSpot.AdditionalData.PotaRef
 		unified.AdditionalData.PotaMode = potaSpot.AdditionalData.PotaMode
