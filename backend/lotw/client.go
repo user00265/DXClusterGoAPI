@@ -194,8 +194,8 @@ func (c *Client) migrateSchema(db *sql.DB) error {
 		logging.Info("Successfully migrated LoTW schema to new version")
 
 		// Clear the download metadata so the data will be re-fetched with the new schema
-		clearMetadataQuery := fmt.Sprintf("DELETE FROM %s WHERE data_type = 'lotw';", metadataTableName)
-		if _, err := db.Exec(clearMetadataQuery); err != nil {
+		clearMetadataQuery := fmt.Sprintf("DELETE FROM %s WHERE data_type = ?;", metadataTableName)
+		if _, err := db.Exec(clearMetadataQuery, "lotw"); err != nil {
 			logging.Warn("Failed to clear LoTW metadata during migration: %v", err)
 		}
 	}
@@ -208,10 +208,10 @@ func (c *Client) updateLastDownloadTime(ctx context.Context, sourceURL string, f
 	db := c.dbClient.GetDB()
 	query := fmt.Sprintf(`
 		INSERT OR REPLACE INTO %s (data_type, last_updated, file_size, source_url)
-		VALUES ('lotw', ?, ?, ?)
+		VALUES (?, ?, ?, ?)
 	`, metadataTableName)
 
-	_, err := db.ExecContext(ctx, query, time.Now().UTC().Format(time.RFC3339), fileSize, sourceURL)
+	_, err := db.ExecContext(ctx, query, "lotw", time.Now().UTC().Format(time.RFC3339), fileSize, sourceURL)
 	if err != nil {
 		return fmt.Errorf("failed to update LoTW download metadata: %w", err)
 	}
@@ -222,11 +222,11 @@ func (c *Client) updateLastDownloadTime(ctx context.Context, sourceURL string, f
 func (c *Client) GetLastDownloadTime(ctx context.Context) (time.Time, error) {
 	db := c.dbClient.GetDB()
 	query := fmt.Sprintf(`
-		SELECT last_updated FROM %s WHERE data_type = 'lotw'
+		SELECT last_updated FROM %s WHERE data_type = ?
 	`, metadataTableName)
 
 	var lastUpdated string
-	err := db.QueryRowContext(ctx, query).Scan(&lastUpdated)
+	err := db.QueryRowContext(ctx, query, "lotw").Scan(&lastUpdated)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No record found, return zero time to indicate never downloaded
@@ -277,7 +277,18 @@ func (c *Client) needsUpdate(ctx context.Context) (bool, error) {
 }
 
 // getTableRecordCount returns the number of records in the specified table.
+// Only allows whitelisted table names to prevent SQL injection.
 func (c *Client) getTableRecordCount(ctx context.Context, tableName string) (int, error) {
+	// Whitelist of allowed table names to prevent SQL injection via table name parameter
+	allowedTables := map[string]bool{
+		dbTableName:       true,
+		metadataTableName: true,
+	}
+
+	if !allowedTables[tableName] {
+		return 0, fmt.Errorf("invalid table name: %s", tableName)
+	}
+
 	var count int
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
 	err := c.dbClient.GetDB().QueryRowContext(ctx, query).Scan(&count)
