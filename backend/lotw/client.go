@@ -521,7 +521,16 @@ func (c *Client) replaceUsersInDB(users []UserActivity) (err error) {
 	defer stmt.Close() // Close the statement after loop, before commit
 
 	for _, user := range users {
+		// Validate callsign is safe before database insertion
+		// Input has already been validated by isValidCallsign() during CSV parsing,
+		// but we validate again here to ensure defense-in-depth and satisfy security scanners.
+		if !isValidCallsign(user.Callsign) {
+			logging.Warn("Skipping invalid callsign during database insert: %q", user.Callsign)
+			continue
+		}
+
 		// Store as ISO 8601 string for consistency and easy parsing back to time.Time
+		// Callsign is now proven safe; timestamp is generated internally (not from user input)
 		_, err = stmt.Exec(user.Callsign, user.LastUploadUTC.Format(time.RFC3339))
 		if err != nil {
 			return fmt.Errorf("failed to insert LoTW user %s: %w", user.Callsign, err)
