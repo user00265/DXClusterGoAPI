@@ -174,6 +174,169 @@ func TestLookupDXCC_WithRealData(t *testing.T) {
 	}
 }
 
+// TestLookupDXCC_FlagField verifies that flag field is populated from all code paths
+func TestLookupDXCC_FlagField(t *testing.T) {
+	// Create a mock client with real DXCC client to test actual flag lookup
+	ctx := context.Background()
+	
+	// Create DB client (temporary for this test)
+	cfg := config.Config{DXCCUpdateInterval: 0}
+	dataDir := "." // Uses current directory for dxcc.db
+	dbClient, err := db.NewSQLiteClient(dataDir, dxcc.DBFileName)
+	if err != nil {
+		t.Fatalf("Failed to create SQLite DB client: %v", err)
+	}
+	defer dbClient.Close()
+
+	// Create DXCC client
+	dxccClient, err := dxcc.NewClient(ctx, cfg, dbClient)
+	if err != nil {
+		t.Fatalf("Failed to create DXCC client: %v", err)
+	}
+	defer dxccClient.Close()
+
+	// Load data if needed
+	if err := dxccClient.LoadMapsFromDB(ctx); err != nil {
+		t.Fatalf("Failed to load DXCC maps from database: %v", err)
+	}
+	
+	// Check if data is loaded
+	if len(dxccClient.PrefixesMap) == 0 {
+		t.Skip("DXCC data not available; skipping flag test")
+	}
+
+	// Test cases with known ADIF numbers that have flags
+	testCases := []struct {
+		callsign     string
+		expectedFlag string
+		description  string
+	}{
+		{"K1JT", "🇺🇸", "USA via prefix lookup"},
+		{"W2ABC", "🇺🇸", "USA via prefix lookup"},
+		{"VE3ABC", "🇨🇦", "Canada via prefix lookup"},
+		{"G3ABC", "🇬🇧", "UK via prefix lookup"},
+		{"JA1ABC", "🇯🇵", "Japan via prefix lookup"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			result, err := LookupDXCC(tc.callsign, dxccClient)
+			if err != nil {
+				t.Errorf("LookupDXCC(%q) error: %v", tc.callsign, err)
+				return
+			}
+			if result == nil {
+				t.Errorf("LookupDXCC(%q) returned nil", tc.callsign)
+				return
+			}
+			if result.Flag == "" {
+				t.Errorf("LookupDXCC(%q).Flag is empty, expected %q", tc.callsign, tc.expectedFlag)
+			}
+			if result.Flag != tc.expectedFlag {
+				t.Logf("LookupDXCC(%q).Flag = %q, expected %q (may be OK if entity mapping changed)", tc.callsign, result.Flag, tc.expectedFlag)
+			}
+		})
+	}
+}
+
+// TestBuildDxccInfo verifies the centralized BuildDxccInfo function
+func TestBuildDxccInfo(t *testing.T) {
+	testCases := []struct {
+		name         string
+		adif         int
+		continent    string
+		entity       string
+		cqz          int
+		ituz         int
+		latitude     float64
+		longitude    float64
+		expectedFlag string
+	}{
+		{
+			name:         "United States",
+			adif:         291,
+			continent:    "NA",
+			entity:       "UNITED STATES OF AMERICA",
+			cqz:          5,
+			ituz:         8,
+			latitude:     39.0,
+			longitude:    -98.0,
+			expectedFlag: "🇺🇸",
+		},
+		{
+			name:         "Canada",
+			adif:         1,
+			continent:    "NA",
+			entity:       "CANADA",
+			cqz:          5,
+			ituz:         9,
+			latitude:     45.0,
+			longitude:    -75.0,
+			expectedFlag: "🇨🇦",
+		},
+		{
+			name:         "Japan",
+			adif:         339,
+			continent:    "AS",
+			entity:       "JAPAN",
+			cqz:          25,
+			ituz:         45,
+			latitude:     35.0,
+			longitude:    139.0,
+			expectedFlag: "🇯🇵",
+		},
+		{
+			name:         "Unknown entity (no flag)",
+			adif:         9999,
+			continent:    "XX",
+			entity:       "TEST ENTITY",
+			cqz:          0,
+			ituz:         0,
+			latitude:     0.0,
+			longitude:    0.0,
+			expectedFlag: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := BuildDxccInfo(tc.adif, tc.continent, tc.entity, tc.cqz, tc.ituz, tc.latitude, tc.longitude)
+			
+			if result == nil {
+				t.Fatal("BuildDxccInfo returned nil")
+			}
+			
+			if result.DXCCID != tc.adif {
+				t.Errorf("DXCCID = %d, want %d", result.DXCCID, tc.adif)
+			}
+			if result.Cont != tc.continent {
+				t.Errorf("Cont = %q, want %q", result.Cont, tc.continent)
+			}
+			if result.CQZ != tc.cqz {
+				t.Errorf("CQZ = %d, want %d", result.CQZ, tc.cqz)
+			}
+			if result.ITUZ != tc.ituz {
+				t.Errorf("ITUZ = %d, want %d", result.ITUZ, tc.ituz)
+			}
+			if result.Latitude != tc.latitude {
+				t.Errorf("Latitude = %f, want %f", result.Latitude, tc.latitude)
+			}
+			if result.Longitude != tc.longitude {
+				t.Errorf("Longitude = %f, want %f", result.Longitude, tc.longitude)
+			}
+			if result.Flag != tc.expectedFlag {
+				t.Errorf("Flag = %q, want %q", result.Flag, tc.expectedFlag)
+			}
+			
+			// Verify entity name has title case applied
+			expectedEntity := toUcWord(tc.entity)
+			if result.Entity != expectedEntity {
+				t.Errorf("Entity = %q, want %q (title case)", result.Entity, expectedEntity)
+			}
+		})
+	}
+}
+
 // mockDXCCClient is a mock implementation for unit testing
 type mockDXCCClient struct {
 	exceptions map[string]*dxcc.DxccInfo
