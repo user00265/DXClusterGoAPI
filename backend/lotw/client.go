@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -396,6 +397,15 @@ func (c *Client) fetchAndStoreUsers(ctx context.Context) error {
 	return nil
 }
 
+// isValidCallsign validates that a callsign contains only alphanumeric characters and slashes.
+// This prevents SQL injection by ensuring only safe characters are in the callsign field.
+func isValidCallsign(callsign string) bool {
+	// Amateur radio callsigns contain letters, numbers, and slashes only
+	// Examples: W1AW, N0CALL, VE3/W1AW, KH0/W1AW
+	validCallsignPattern := regexp.MustCompile(`^[A-Z0-9/]+$`)
+	return len(callsign) > 0 && len(callsign) <= 20 && validCallsignPattern.MatchString(callsign)
+}
+
 // parseLoTWCSV parses the LoTW CSV data from an io.Reader.
 func parseLoTWCSV(r io.Reader) ([]UserActivity, error) {
 	scanner := bufio.NewScanner(r)
@@ -411,6 +421,12 @@ func parseLoTWCSV(r io.Reader) ([]UserActivity, error) {
 		callsign := strings.ToUpper(strings.TrimSpace(parts[0]))
 		dateStr := strings.TrimSpace(parts[1])
 		timeStr := strings.TrimSpace(parts[2])
+
+		// Validate callsign to prevent SQL injection
+		if !isValidCallsign(callsign) {
+			logging.Warn("Skipping LoTW entry with invalid callsign: %q", callsign)
+			continue
+		}
 
 		// LoTW dates are UTC YYYY-MM-DD, times are UTC HH:MM:SS
 		// We'll combine them and parse as UTC.
