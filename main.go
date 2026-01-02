@@ -337,6 +337,8 @@ func initializeDXClusters(ctx context.Context, cfg *config.Config) ([]*cluster.C
 func setupHTTPRouter(cfg *config.Config) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
+	router.RedirectTrailingSlash = true
+	router.RedirectFixedPath = true
 	router.Use(logging.GinRecovery())
 	router.Use(logging.GinLogger())
 
