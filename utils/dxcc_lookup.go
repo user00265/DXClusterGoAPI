@@ -2,6 +2,7 @@ package utils
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/user00265/dxclustergoapi/backend/dxcc"
@@ -11,6 +12,35 @@ import (
 type DXCCLookupClient interface {
 	GetException(call string) (*dxcc.DxccInfo, bool)
 	GetPrefix(prefix string) (*dxcc.DxccInfo, bool)
+}
+
+// BuildDxccInfo constructs a complete DxccInfo object from basic DXCC data.
+// This is the single source of truth for DXCC output formatting.
+// Entity names are converted to title case for consistent output.
+func BuildDxccInfo(adif int, continent, entity string, cqz, ituz int, latitude, longitude float64) *dxcc.DxccInfo {
+	info := &dxcc.DxccInfo{
+		Cont:      continent,
+		Entity:    toUcWord(entity),
+		DXCCID:    adif,
+		CQZ:       cqz,
+		ITUZ:      ituz,
+		Latitude:  latitude,
+		Longitude: longitude,
+		Flag:      dxcc.FlagEmojis[strconv.Itoa(adif)],
+	}
+	return info
+}
+
+// toUcWord converts a string to title case (capitalize each word).
+// This mirrors the behavior of the backend dxcc package for consistency.
+func toUcWord(s string) string {
+	words := strings.Fields(strings.ToLower(s))
+	for i, word := range words {
+		if len(word) > 0 {
+			words[i] = strings.ToUpper(word[:1]) + word[1:]
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 // LookupDXCC performs DXCC entity lookup for a callsign.

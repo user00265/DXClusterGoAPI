@@ -1390,71 +1390,89 @@ func (c *Client) determineEffectivePrefix(callsign string) string {
 	return prefix
 }
 
+// buildDxccInfo is the centralized function for building DxccInfo objects.
+// It ensures all fields including the flag are consistently populated.
+// If applyTitleCase is true, entity names are converted to title case.
+func buildDxccInfo(adif int, continent, entity string, cqz, ituz int, latitude, longitude float64, applyTitleCase bool) *DxccInfo {
+	entityName := entity
+	if applyTitleCase {
+		entityName = toUcWord(entity)
+	}
+	info := &DxccInfo{
+		Cont:      continent,
+		Entity:    entityName,
+		DXCCID:    adif,
+		CQZ:       cqz,
+		ITUZ:      ituz,
+		Latitude:  latitude,
+		Longitude: longitude,
+		Flag:      FlagEmojis[strconv.Itoa(adif)],
+	}
+	return info
+}
+
 // buildDxccInfoFromPrefix constructs DxccInfo from a DxccPrefix.
 func (c *Client) buildDxccInfoFromPrefix(pfx *DxccPrefix) *DxccInfo {
-	info := &DxccInfo{
-		Cont:      pfx.Cont,
-		Entity:    toUcWord(pfx.Entity), // Apply title case as in original Node.js
-		DXCCID:    pfx.ADIF,
-		CQZ:       pfx.CQZ,
-		Latitude:  pfx.Lat,
-		Longitude: pfx.Long,
-	}
-
 	// Prefer exported EntitiesMap if populated (tests may set it) and use it to enrich prefix info.
 	entities := c.entitiesMap
 	if len(c.EntitiesMap) != 0 {
 		entities = c.EntitiesMap
 	}
-	if entity, ok := entities[pfx.ADIF]; ok {
+	
+	// Start with data from prefix
+	entity := pfx.Entity
+	latitude := pfx.Lat
+	longitude := pfx.Long
+	cqz := pfx.CQZ
+	cont := pfx.Cont
+	ituz := 0
+	
+	// Enrich with entity data if available
+	if ent, ok := entities[pfx.ADIF]; ok {
 		// Use entity name for a canonical Entity value and entity lat/long when available
-		if entity.Name != "" {
-			info.Entity = toUcWord(entity.Name)
+		if ent.Name != "" {
+			entity = ent.Name
 		}
-		if entity.Long != 0.0 {
-			info.Longitude = entity.Long
+		if ent.Long != 0.0 {
+			longitude = ent.Long
 		}
-		if entity.Lat != 0.0 {
-			info.Latitude = entity.Lat
+		if ent.Lat != 0.0 {
+			latitude = ent.Lat
 		}
-		info.ITUZ = entity.ITUZ
+		ituz = ent.ITUZ
 		// Copy CQZ and Cont when available to match test expectations
-		if entity.CQZ != 0 {
-			info.CQZ = entity.CQZ
+		if ent.CQZ != 0 {
+			cqz = ent.CQZ
 		}
-		if entity.Cont != "" {
-			info.Cont = entity.Cont
+		if ent.Cont != "" {
+			cont = ent.Cont
 		}
 	}
-	logging.Debug("DXCC build info from prefix ADIF=%d -> Entity=%q ITUZ=%d Lat=%f Lng=%f Flag=%q", pfx.ADIF, info.Entity, info.ITUZ, info.Latitude, info.Longitude, info.Flag)
-
-	// Look up flag from static map
-	info.Flag = FlagEmojis[strconv.Itoa(pfx.ADIF)]
+	
+	// Use centralized function to build complete DxccInfo
+	info := buildDxccInfo(pfx.ADIF, cont, entity, cqz, ituz, latitude, longitude, true)
+	
+	logging.Debug("DXCC build info from prefix ADIF=%d -> Entity=%q ITUZ=%d Lat=%f Lng=%f Flag=%q", 
+		info.DXCCID, info.Entity, info.ITUZ, info.Latitude, info.Longitude, info.Flag)
+	
 	return info
 }
 
 // buildDxccInfoFromEntity constructs DxccInfo from a DxccEntity. Used for ADIF 0 (NONE).
 func (c *Client) buildDxccInfoFromEntity(entity *DxccEntity) *DxccInfo {
-	info := &DxccInfo{
-		Cont:      entity.Cont,
-		Entity:    toUcWord(entity.Name),
-		DXCCID:    entity.ADIF,
-		CQZ:       entity.CQZ,
-		ITUZ:      entity.ITUZ,
-		Latitude:  entity.Lat,
-		Longitude: entity.Long,
-	}
+	entityName := entity.Name
+	
 	// If ADIF 0, tests expect the specific '- None - (e.g. /MM, /AM)' entity name; normalize to that
 	if entity.ADIF == 0 {
 		// Accept several variants and normalize to test-expected capitalization/format
 		name := strings.TrimSpace(entity.Name)
 		if strings.EqualFold(name, "- none - (e.g. /mm, /am)") || strings.EqualFold(name, "- none -") || name == "" {
-			info.Entity = "- None - (e.g. /MM, /AM)"
-		} else {
-			info.Entity = toUcWord(name)
+			entityName = "- None - (e.g. /MM, /AM)"
 		}
 	}
-	info.Flag = FlagEmojis[strconv.Itoa(entity.ADIF)] // Should be empty for ADIF 0
+	
+	// Use centralized function to build complete DxccInfo
+	info := buildDxccInfo(entity.ADIF, entity.Cont, entityName, entity.CQZ, entity.ITUZ, entity.Lat, entity.Long, true)
 	return info
 }
 
@@ -1528,12 +1546,16 @@ func (c *Client) GetException(call string) (*DxccInfo, bool) {
 	if !found {
 		return nil, false
 	}
-	info := &DxccInfo{
-		DXCCID: exc.ADIF,
-		Entity: exc.Entity,
-		CQZ:    exc.CQZ,
-		Cont:   exc.Cont,
+	
+	// Get ITUZ from entities map if available
+	ituz := 0
+	if entity, ok := c.entitiesMap[exc.ADIF]; ok {
+		ituz = entity.ITUZ
 	}
+	
+	// Build complete DxccInfo with all fields including flag
+	// Don't apply title case - use entity name as-is from database
+	info := buildDxccInfo(exc.ADIF, exc.Cont, exc.Entity, exc.CQZ, ituz, exc.Lat, exc.Long, false)
 	return info, true
 }
 
@@ -1546,11 +1568,15 @@ func (c *Client) GetPrefix(prefix string) (*DxccInfo, bool) {
 	if !found {
 		return nil, false
 	}
-	info := &DxccInfo{
-		DXCCID: pfx.ADIF,
-		Entity: pfx.Entity,
-		CQZ:    pfx.CQZ,
-		Cont:   pfx.Cont,
+	
+	// Get ITUZ from entities map if available
+	ituz := 0
+	if entity, ok := c.entitiesMap[pfx.ADIF]; ok {
+		ituz = entity.ITUZ
 	}
+	
+	// Build complete DxccInfo with all fields including flag
+	// Don't apply title case - use entity name as-is from database
+	info := buildDxccInfo(pfx.ADIF, pfx.Cont, pfx.Entity, pfx.CQZ, ituz, pfx.Lat, pfx.Long, false)
 	return info, true
 }
