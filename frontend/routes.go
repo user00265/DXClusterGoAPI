@@ -25,12 +25,6 @@ type SpotCache interface {
 
 // SetupRoutes configures all API endpoints
 func SetupRoutes(r *gin.RouterGroup, cache SpotCache, dxccClient *dxcc.Client, lotwClient *lotw.Client) {
-	// GET /spots - Retrieve all cached spots.
-	r.GET("/spots", func(c *gin.Context) {
-		spots := cache.GetAllSpots()
-		c.JSON(http.StatusOK, spots)
-	})
-
 	// GET /spot/:qrg - Retrieve the latest spot for a given frequency (QRG).
 	// Supports: Hz (14250000), kHz (14250), MHz (14.250)
 	r.GET("/spot/:qrg", func(c *gin.Context) {
@@ -65,6 +59,12 @@ func SetupRoutes(r *gin.RouterGroup, cache SpotCache, dxccClient *dxcc.Client, l
 		} else {
 			c.JSON(http.StatusNotFound, gin.H{"error": "No spot found for this frequency"})
 		}
+	})
+
+	// GET /spots - Retrieve all cached spots.
+	r.GET("/spots", func(c *gin.Context) {
+		spots := cache.GetAllSpots()
+		c.JSON(http.StatusOK, spots)
 	})
 
 	// GET /spots/:band - Retrieve all cached spots for a given band.
