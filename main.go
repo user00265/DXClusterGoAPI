@@ -337,8 +337,22 @@ func initializeDXClusters(ctx context.Context, cfg *config.Config) ([]*cluster.C
 func setupHTTPRouter(cfg *config.Config) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	router.RedirectTrailingSlash = true
-	router.RedirectFixedPath = true
+
+	// Normalize paths: remove trailing slashes and collapse multiple slashes
+	router.Use(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		// Collapse multiple slashes
+		for strings.Contains(path, "//") {
+			path = strings.ReplaceAll(path, "//", "/")
+		}
+		// Remove trailing slash (except for root)
+		if len(path) > 1 && strings.HasSuffix(path, "/") {
+			path = strings.TrimSuffix(path, "/")
+		}
+		c.Request.URL.Path = path
+		c.Next()
+	})
+
 	router.Use(logging.GinRecovery())
 	router.Use(logging.GinLogger())
 
