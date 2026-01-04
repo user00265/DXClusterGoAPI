@@ -22,14 +22,15 @@ const (
 	DefaultDataDir            = "/data"            // Inside the container
 
 	// Hard-coded Club Log API details (per-application, not per-user)
-	// These values are based on the original Node.js project's use.
-	ClubLogAPIKey = "608df94896cb9c5421ae748235492b43815610c9"
+	// If you need to change this, please contact the ClubLog Helpdesk for a new API key.
+	// See: https://clublog.freshdesk.com/support/solutions/articles/54910-api-keys
+	ClubLogAPIKey = "6c57da3a4712d42091bd39409cbac82d30044a61"
 )
 
 var (
 	// These are baked-in, not user-configurable. Keep them package-level so they can be
 	// changed by developers in code if necessary.
-	ClubLogAPIURL     = "https://cdn.clublog.org/cty.php?api=608df94896cb9c5421ae748235492b43815610c9"
+	ClubLogAPIURL     = fmt.Sprintf("https://cdn.clublog.org/cty.php?api=%s", ClubLogAPIKey)
 	FallbackGitHubURL = "https://github.com/wavelog/dxcc_data/raw/refs/heads/master/cty.xml.gz"
 
 	// Default LoTW URL - can be overridden via environment variable
@@ -115,12 +116,15 @@ type Config struct {
 	LoTWUpdateInterval time.Duration `env:"LOTW_UPDATE_INTERVAL" envDefault:"168h"` // Weekly
 
 	Redis RedisConfig
+
 	// ClubLog API key (allows overriding via env)
-	ClubLogAPIKey string `env:"CLUBLOG_API_KEY" envDefault:"608df94896cb9c5421ae748235492b43815610c9"`
+	ClubLogAPIKey string `env:"CLUBLOG_API_KEY"`
+
 	// Optional (test) overrides for DXCC source URLs. These are usually the package-level
 	// defaults in production, but tests create Config literals expecting to override them.
 	ClubLogAPIURL     string
 	FallbackGitHubURL string
+
 	// Default channel buffer for DX cluster clients (overridable per-cluster config)
 	DXCChannelBuffer int `env:"DXC_CHANNEL_BUFFER" envDefault:"32"`
 
@@ -128,8 +132,10 @@ type Config struct {
 	// TRUSTED_PROXIES: comma-separated list of trusted proxy IPs or CIDR ranges (e.g., "192.168.1.0/24,10.0.0.5")
 	// If not set, X-Forwarded-For header is ignored
 	TrustedProxies string `env:"TRUSTED_PROXIES" envDefault:""`
+
 	// REMOTE_IP_HEADER: the header name to use for remote IP extraction (default: X-Forwarded-For)
 	RemoteIPHeader string `env:"REMOTE_IP_HEADER" envDefault:"X-Forwarded-For"`
+
 	// REMOTE_IP_INVERT: if false (default), picks the LAST IP in the header; if true, picks the FIRST IP
 	RemoteIPInvert bool `env:"REMOTE_IP_INVERT" envDefault:"false"`
 }
@@ -144,6 +150,11 @@ func LoadConfig() (*Config, error) {
 	// Parse Redis-specific options
 	if err := env.Parse(&cfg.Redis); err != nil {
 		return nil, fmt.Errorf("failed to parse Redis environment variables: %w", err)
+	}
+
+	// Set ClubLog API key default if not provided via environment
+	if cfg.ClubLogAPIKey == "" {
+		cfg.ClubLogAPIKey = ClubLogAPIKey
 	}
 
 	// --- DX Cluster Configuration Logic ---
