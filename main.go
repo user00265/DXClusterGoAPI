@@ -343,15 +343,26 @@ func setupHTTPRouter(cfg *config.Config) *gin.Engine {
 	// Normalize paths: remove trailing slashes and collapse multiple slashes
 	router.Use(func(c *gin.Context) {
 		path := c.Request.URL.Path
+		originalPath := path
+
 		// Collapse multiple slashes
 		for strings.Contains(path, "//") {
 			path = strings.ReplaceAll(path, "//", "/")
 		}
+
 		// Remove trailing slash (except for root)
 		if len(path) > 1 && strings.HasSuffix(path, "/") {
 			path = strings.TrimSuffix(path, "/")
 		}
-		c.Request.URL.Path = path
+
+		// If path was modified, re-route with normalized path
+		if path != originalPath {
+			c.Request.URL.Path = path
+			router.HandleContext(c)
+			c.Abort()
+			return
+		}
+
 		c.Next()
 	})
 
