@@ -1,6 +1,6 @@
 module github.com/user00265/dxclustergoapi
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/caarlos0/env/v11 v11.4.0
@@ -8,7 +8,7 @@ require (
 	github.com/gin-gonic/gin v1.11.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-redis/redis/v8 v8.11.5
-	golang.org/x/net v0.50.0
+	golang.org/x/net v0.51.0
 )
 
 require (
