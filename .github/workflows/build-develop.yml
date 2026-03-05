@@ -87,7 +87,7 @@ jobs:
     # Build and Push Docker images (only if PUSH_DOCKER is true)
     - name: Set up Docker Buildx
       if: steps.get_version.outputs.PUSH_DOCKER == 'true'
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
       with:
         version: latest
 
