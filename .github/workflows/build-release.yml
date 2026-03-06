@@ -120,7 +120,7 @@ jobs:
 
     - name: Build and Push Docker images (multi-arch)
       if: steps.get_version.outputs.PUSH_DOCKER == 'true' && github.event_name != 'pull_request'
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
       with:
         context: .
         push: true
