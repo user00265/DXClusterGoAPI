@@ -294,8 +294,6 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	c.statusMutex.Lock()
 	c.isConnected = false
 	c.readLoopStarted = false
-	c.statusMutex.Unlock()
-	c.statusMutex.Lock()
 	if c.conn != nil {
 		_ = c.conn.Close() // Ensure underlying connection is closed
 		c.conn = nil
