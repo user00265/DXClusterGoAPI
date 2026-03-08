@@ -739,19 +739,6 @@ func gracefulShutdown(ctx context.Context, srv *http.Server, dxClusterClients []
 	return 0
 }
 
-// cleanCallsignForDXCC removes invalid characters and suffixes that interfere with DXCC lookup
-func cleanCallsignForDXCC(call string) string {
-	call = strings.TrimSpace(call)
-	// Remove common system suffixes that aren't part of the actual callsign
-	if idx := strings.Index(call, "#"); idx != -1 {
-		call = call[:idx]
-	}
-	if idx := strings.Index(call, "-#"); idx != -1 {
-		call = call[:idx]
-	}
-	return strings.TrimSpace(call)
-}
-
 // enhanceSpot enhances a raw spot with DXCC and LoTW information.
 func enhanceSpot(ctx context.Context, s spot.Spot, dxccClient *dxcc.Client, lotwClient *lotw.Client) (spot.Spot, error) {
 	// Known pseudo-callsigns used by automated systems (skip DXCC/LoTW lookups)
