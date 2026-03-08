@@ -1065,30 +1065,11 @@ func (c *Client) GetDxccInfo(ctx context.Context, callsign string, lookupDate *t
 	// 1. Normalize and check exceptions first (as per PHP logic)
 	normalizedCall := strings.ToUpper(strings.TrimSpace(callsign))
 	logging.Debug("DXCC lookup requested for callsign: %s (normalized: %s)", callsign, normalizedCall)
-	// Merge internal maps with exported maps (exported maps override internal but do not hide other keys)
-	exceptions := make(map[string]DxccException)
-	for k, v := range c.exceptionsMap {
-		exceptions[k] = v
-	}
-	for k, v := range c.ExceptionsMap {
-		exceptions[k] = v
-	}
 
-	prefixes := make(map[string]DxccPrefix)
-	for k, v := range c.prefixesMap {
-		prefixes[k] = v
-	}
-	for k, v := range c.PrefixesMap {
-		prefixes[k] = v
-	}
-
-	entities := make(map[int]DxccEntity)
-	for k, v := range c.entitiesMap {
-		entities[k] = v
-	}
-	for k, v := range c.EntitiesMap {
-		entities[k] = v
-	}
+	// Use internal maps directly (exported maps point to the same data, synced in loadMapsFromDB)
+	exceptions := c.exceptionsMap
+	prefixes := c.prefixesMap
+	entities := c.entitiesMap
 
 	if exc, ok := exceptions[normalizedCall]; ok {
 		// Check validity period if a lookupDate is provided
@@ -1104,9 +1085,8 @@ func (c *Client) GetDxccInfo(ctx context.Context, callsign string, lookupDate *t
 	// 2. Perform callsign prefix parsing to get the effective prefix
 	effectivePrefix := c.determineEffectivePrefix(normalizedCall)
 	logging.Debug("DXCC determined effective prefix: %q for callsign %s", effectivePrefix, normalizedCall)
-	// Diagnostic: show which maps we're using for this lookup
-	logging.Debug("DXCC using maps for lookup: prefixes=%d exceptions=%d entities=%d (exported prefixes set? %t)",
-		len(prefixes), len(exceptions), len(entities), len(c.PrefixesMap) != 0)
+	logging.Debug("DXCC using maps for lookup: prefixes=%d exceptions=%d entities=%d",
+		len(prefixes), len(exceptions), len(entities))
 	if effectivePrefix == "" {
 		// If prefix parsing yields nothing, return the "- NONE -" entity
 		if entity, ok := entities[0]; ok { // ADIF 0 is for NONE
