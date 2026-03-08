@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -138,13 +139,9 @@ func (c *InMemorySpotTracker) UpdateSpot(ctx context.Context, sp spot.Spot, mode
 			entries = append(entries, expEntry{k, v.expiry})
 		}
 		// Sort by expiry time (ascending)
-		for i := 0; i < len(entries)-1; i++ {
-			for j := i + 1; j < len(entries); j++ {
-				if entries[j].expiry.Before(entries[i].expiry) {
-					entries[i], entries[j] = entries[j], entries[i]
-				}
-			}
-		}
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].expiry.Before(entries[j].expiry)
+		})
 		// Remove oldest entries until we're under maxCacheSize
 		removeCount := len(c.cache) - c.maxCacheSize
 		for i := 0; i < removeCount && i < len(entries); i++ {
