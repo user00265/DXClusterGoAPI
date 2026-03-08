@@ -48,20 +48,6 @@ type PotaRawSpot struct {
 	ParkName     *string `json:"parkName"` // Can be null
 }
 
-// Spot represents a parsed POTA spot, to be consistent with DXCluster Spot.
-type Spot struct {
-	Spotter        string    `json:"spotter"`
-	Spotted        string    `json:"spotted"`
-	Frequency      int64     `json:"frequency"` // In Hz (canonical storage unit)
-	Message        string    `json:"message"`
-	When           time.Time `json:"when"`
-	Source         string    `json:"source"` // "pota"
-	AdditionalData struct {
-		PotaRef  string `json:"pota_ref"`
-		PotaMode string `json:"pota_mode"`
-	} `json:"additional_data"`
-}
-
 // SpotTracker defines the interface for tracking POTA spots with expiry management.
 type SpotTracker interface {
 	GetSpot(ctx context.Context, sp spot.Spot, mode string) (*spot.Spot, error)
@@ -391,41 +377,28 @@ func (c *Client) fetchAndProcessSpots(ctx context.Context) {
 			continue // Skip this spot
 		}
 
-		potaSpot := Spot{
+		message := fmt.Sprintf("%s%sPOTA @ %s %s %s", item.Mode, func() string {
+			if item.Mode != "" {
+				return " "
+			}
+			return ""
+		}(), item.Reference, item.Name, item.LocationDesc)
+
+		logging.Debug("POTA received spot: activator=%s spotter=%s freq=%s mode=%s ref=%s", activator, spotter, utils.FormatFrequency(freqHz), item.Mode, item.Reference)
+
+		unified := spot.Spot{
 			Spotter:   spotter,
 			Spotted:   activator,
 			Frequency: freqHz,
-			// Build message without extra parentheses to match tests' expected canonicalization
-			Message: fmt.Sprintf("%s%sPOTA @ %s %s %s", item.Mode, func() string {
-				if item.Mode != "" {
-					return " "
-				}
-				return ""
-			}(), item.Reference, item.Name, item.LocationDesc),
-			When:   spotTime,
-			Source: "pota",
-		}
-		potaSpot.AdditionalData.PotaRef = item.Reference
-		potaSpot.AdditionalData.PotaMode = item.Mode
-
-		logging.Debug("POTA received spot: activator=%s spotter=%s freq=%s mode=%s ref=%s", activator, spotter, utils.FormatFrequency(freqHz), item.Mode, item.Reference)
-		// Use the unified canonical spot for all processing
-		unified := spot.Spot{
-			Spotter:   potaSpot.Spotter,
-			Spotted:   potaSpot.Spotted,
-			Frequency: potaSpot.Frequency,
-			Message:   potaSpot.Message,
-			When:      potaSpot.When,
-			Source:    potaSpot.Source,
+			Message:   message,
+			When:      spotTime,
+			Source:    "pota",
 			Mode:      item.Mode,
-			Submode:   "", // POTA doesn't provide submode
 		}
-		unified.AdditionalData.PotaRef = potaSpot.AdditionalData.PotaRef
-		unified.AdditionalData.PotaMode = potaSpot.AdditionalData.PotaMode
+		unified.AdditionalData.PotaRef = item.Reference
+		unified.AdditionalData.PotaMode = item.Mode
 
-		// Always emit the spot. If a location is re-spotted (e.g., frequency change),
-		// we emit the updated spot and update the cache accordingly.
-		logging.Info("POTA emitting spot: spotted=%s freq=%s msg=%q", potaSpot.Spotted, utils.FormatFrequency(potaSpot.Frequency), potaSpot.Message)
+		logging.Info("POTA emitting spot: spotted=%s freq=%s msg=%q", unified.Spotted, utils.FormatFrequency(unified.Frequency), unified.Message)
 
 		// Send the unified, cleaned spot so downstream consumers and JSON
 		// marshaling only ever see the canonical values (no '-#').
