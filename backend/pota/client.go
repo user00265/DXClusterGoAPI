@@ -219,54 +219,6 @@ func (c *RedisSpotTracker) UpdateSpot(ctx context.Context, sp spot.Spot, mode st
 	return c.rdb.SetEX(ctx, baseKey, spotJSON, c.spotExpiry).Err()
 }
 
-// Old IsSpotInCache checks if a spot exists in Redis, using a composite key and frequency deviation.
-// (Deprecated - no longer used for filtering, but kept for reference)
-func (c *RedisSpotTracker) isSpotInCacheOld(ctx context.Context, newSpot spot.Spot, mode string) (bool, error) {
-	// Generate a base key for the spot (excluding frequency)
-	baseKey := fmt.Sprintf("pota:spot:%s:%s:%s", newSpot.Spotted, strings.ToLower(newSpot.Message), strings.ToLower(mode))
-
-	// For frequency deviation, we can store a set of frequencies for a base key
-	// Or, more simply, store a single frequency, and check if the new one falls within deviation.
-	// For now, let's keep it simple: store a string representation that includes frequency for comparison.
-	// A more robust solution might involve geo-spatial indices if frequency deviation was truly a range check.
-	// For simple "seen this exact spot (within freq deviation) recently" check, we can store a canonical key.
-
-	// For a more exact match as in Node.js, we'll retrieve the stored spot data.
-	// We'll store the full spot data as JSON string in Redis.
-	cachedSpotJSON, err := c.rdb.Get(ctx, baseKey).Result()
-	if err == redis.Nil {
-		return false, nil // Not found
-	}
-	if err != nil {
-		return false, fmt.Errorf("failed to get spot from Redis: %w", err)
-	}
-
-	// Support stored value being either a single Spot JSON or an array of Spots.
-	var existingSpots []spot.Spot
-	if err := json.Unmarshal([]byte(cachedSpotJSON), &existingSpots); err != nil {
-		// Try single Spot
-		var single spot.Spot
-		if err2 := json.Unmarshal([]byte(cachedSpotJSON), &single); err2 != nil {
-			return false, fmt.Errorf("failed to unmarshal cached spot JSON (both array and single): %w / %v", err, err2)
-		}
-		existingSpots = []spot.Spot{single}
-	}
-
-	allowedDeviation := getAllowedDeviation(mode)
-	toleranceHz := int64(allowedDeviation * 1000) // Convert kHz to Hz
-	for _, existingSpot := range existingSpots {
-		if strings.EqualFold(existingSpot.Spotted, newSpot.Spotted) && strings.EqualFold(existingSpot.Message, newSpot.Message) {
-			if utils.FrequencyDeviation(newSpot.Frequency, existingSpot.Frequency, toleranceHz) {
-				logging.Debug("POTA dedupe check (redis): spotted=%s msg=%q existingFreq=%s newFreq=%s within tolerance=%d Hz",
-					newSpot.Spotted, newSpot.Message, utils.FormatFrequency(existingSpot.Frequency), utils.FormatFrequency(newSpot.Frequency), toleranceHz)
-				return true, nil
-			}
-		}
-	}
-
-	return false, nil
-}
-
 // Client manages POTA API polling and spot processing.
 type Client struct {
 	cfg        config.Config
