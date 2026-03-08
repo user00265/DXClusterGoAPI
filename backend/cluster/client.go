@@ -92,9 +92,6 @@ func NewClient(cfg config.ClusterConfig) (*Client, error) {
 	if cfg.LoginPrompt == "" {
 		cfg.LoginPrompt = defaultLoginPrompt
 	}
-	if cfg.Host == "" {
-		return nil, fmt.Errorf("host must be specified for DX cluster")
-	}
 
 	// Regex breakdown (groups kept to match existing code indexes):
 	// 1: DX de
