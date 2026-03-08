@@ -22,6 +22,7 @@ import (
 
 	"github.com/user00265/dxclustergoapi/config"
 	"github.com/user00265/dxclustergoapi/db"
+	"github.com/user00265/dxclustergoapi/httputil"
 	"github.com/user00265/dxclustergoapi/logging"
 	"github.com/user00265/dxclustergoapi/version" // For User-Agent
 )
@@ -191,10 +192,8 @@ type Client struct {
 	TestFallback bool
 }
 
-// HTTPDoer is a minimal interface for http clients used in tests.
-type HTTPDoer interface {
-	Do(req *http.Request) (*http.Response, error)
-}
+// HTTPDoer is an alias for the shared httputil.HTTPDoer interface.
+type HTTPDoer = httputil.HTTPDoer
 
 // NewClient creates and returns a new DXCC client.
 func NewClient(ctx context.Context, cfg config.Config, dbClient db.DBClient) (*Client, error) {

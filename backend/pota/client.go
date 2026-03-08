@@ -14,6 +14,7 @@ import (
 	"github.com/go-redis/redis/v8" // For Redis client operations (SETEX, GET)
 
 	"github.com/user00265/dxclustergoapi/config"
+	"github.com/user00265/dxclustergoapi/httputil"
 	"github.com/user00265/dxclustergoapi/logging"
 	"github.com/user00265/dxclustergoapi/redisclient"
 	"github.com/user00265/dxclustergoapi/spot"
@@ -55,10 +56,8 @@ type SpotTracker interface {
 	// ClearCache() error // Not strictly needed with expiration, but useful for testing or explicit resets
 }
 
-// HTTPDoer is a minimal interface for http clients used in tests.
-type HTTPDoer interface {
-	Do(req *http.Request) (*http.Response, error)
-}
+// HTTPDoer is an alias for the shared httputil.HTTPDoer interface.
+type HTTPDoer = httputil.HTTPDoer
 
 // spotCacheEntry represents a cached spot with an expiry time
 type spotCacheEntry struct {
