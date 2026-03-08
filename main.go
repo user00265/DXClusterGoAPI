@@ -174,7 +174,7 @@ func postCleanupDump(args []string) {
 	if len(args) > 0 && strings.ToLower(args[0]) == "healthcheck" {
 		return
 	}
-	if v := os.Getenv("DX_API_DUMP_POST_CLEANUP"); !(v == "1" || strings.ToLower(v) == "true") {
+	if !utils.EnvBool("DX_API_DUMP_POST_CLEANUP") {
 		logging.Debug("Debug (post-cleanup): goroutines final: %d (set DX_API_DUMP_POST_CLEANUP=1 to see full stacks)", runtime.NumGoroutine())
 		return
 	}
@@ -518,7 +518,7 @@ type spotKey struct {
 func spotAggregator(ctx context.Context, spotChannels []<-chan spot.Spot, cache *frontend.Cache, dxccClient *dxcc.Client, lotwClient *lotw.Client) {
 	logging.Info("Spot aggregation goroutine starting.")
 	merged := mergeSpotChannels(spotChannels...)
-	verbose := os.Getenv("DX_API_VERBOSE_SPOT_PIPELINE") == "1" || strings.ToLower(os.Getenv("DX_API_VERBOSE_SPOT_PIPELINE")) == "true"
+	verbose := utils.EnvBool("DX_API_VERBOSE_SPOT_PIPELINE")
 	spotCount := 0
 
 	recentSpots := make(map[spotKey]time.Time)
@@ -728,7 +728,7 @@ func gracefulShutdown(ctx context.Context, srv *http.Server, dxClusterClients []
 		}
 	}
 
-	if v := os.Getenv("DX_API_DUMP_PRE_SHUTDOWN"); v == "1" || strings.ToLower(v) == "true" {
+	if utils.EnvBool("DX_API_DUMP_PRE_SHUTDOWN") {
 		buf := make([]byte, 1<<20)
 		n := runtime.Stack(buf, true)
 		log.Printf("=== goroutine stack dump (len=%d) ===\n%s\n=== end goroutine stack dump ===", n, string(buf[:n]))

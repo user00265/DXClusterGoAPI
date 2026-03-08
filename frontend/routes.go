@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -233,7 +232,7 @@ func SetupRoutes(r *gin.RouterGroup, cache SpotCache, dxccClient *dxcc.Client, l
 	// Test-only debug endpoint: reports per-source counts.
 	// This route is registered only when DX_API_TEST_DEBUG=1 is set so it
 	// remains unavailable in production by default.
-	if v := os.Getenv("DX_API_TEST_DEBUG"); v == "1" || strings.ToLower(v) == "true" {
+	if utils.EnvBool("DX_API_TEST_DEBUG") {
 		r.GET("/debug", func(c *gin.Context) {
 			counts := make(map[string]int)
 			for _, s := range cache.GetAllSpots() {
