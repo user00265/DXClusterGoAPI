@@ -36,35 +36,26 @@ type ParsedCallsign struct {
 // ParseCallsign tokenizes a raw callsign into A/B/C structure (prefix/callsign/suffix).
 // Does NOT apply DXCC special rules; that is done by LookupDXCC.
 func ParseCallsign(raw string) ParsedCallsign {
-	raw = strings.ToUpper(strings.TrimSpace(raw))
+	original := strings.ToUpper(strings.TrimSpace(raw))
 
 	result := ParsedCallsign{
-		Original: raw,
-		Raw:      raw,
+		Original: original,
 	}
 
-	// Normalize common POTA/auto-system suffixes and invalid characters.
-	// Prefer removing the literal "-#" suffix first, then any remaining
-	// stray '#' characters and trailing hyphens.
-	if idx := strings.Index(raw, "-#"); idx != -1 {
-		raw = raw[:idx]
-	}
-	// Remove any remaining lone '#' characters
-	raw = strings.ReplaceAll(raw, "#", "")
-	// Trim stray hyphens left by replacements
-	raw = strings.Trim(raw, "- ")
-	result.Raw = raw
+	// Delegate cleanup to NormalizeCallsign to avoid duplication
+	cleaned := NormalizeCallsign(raw)
+	result.Raw = cleaned
 
 	// Regex: (A/)?(B)(/C)?(/C2)?
 	// A = prefix with trailing /
 	// B = core callsign (3+ alphanum)
 	// C = suffix with leading /
 	re := regexp.MustCompile(`^((\d|[A-Z])+\/)?((\d|[A-Z]){3,})(\/(\d|[A-Z])+)?(\/(\d|[A-Z])+)?$`)
-	matches := re.FindStringSubmatch(raw)
+	matches := re.FindStringSubmatch(cleaned)
 
 	if matches == nil {
 		// No slashes; treat entire string as B (callsign)
-		result.B = raw
+		result.B = cleaned
 		return result
 	}
 
