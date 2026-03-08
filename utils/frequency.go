@@ -161,16 +161,6 @@ func FormatFrequencyAs(hz int64, unit FrequencyUnit) string {
 	}
 }
 
-// NormalizeToHz takes any frequency representation and returns it as Hz (int64).
-// This is a convenience wrapper around ParseFrequency for code that always expects Hz output.
-//
-// Example:
-//   - NormalizeToHz("14250") -> 14250000
-//   - NormalizeToHz(14.250) -> 14250000
-func NormalizeToHz(input interface{}) (int64, error) {
-	return ParseFrequency(input)
-}
-
 // FrequencyDeviation checks if two frequencies (in Hz) are within a certain tolerance.
 // Useful for detecting duplicate spots with slight frequency drift.
 //
