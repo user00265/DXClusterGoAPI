@@ -113,8 +113,6 @@ func FrequencyTo(hz int64, unit FrequencyUnit) interface{} {
 //   - 2400000000 Hz -> "2.400 GHz"
 //   - 1200000 Hz -> "1200.000 kHz"
 func FormatFrequency(hz int64) string {
-	const eps = 1e-9
-
 	// Convert to MHz first for decision-making
 	mhz := float64(hz) / 1_000_000.0
 
