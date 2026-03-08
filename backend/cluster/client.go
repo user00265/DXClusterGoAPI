@@ -632,11 +632,11 @@ func ParseFrequency(freqStr string) (int64, error) {
 // This allows handling unusual or malformed DX lines from edge-case clusters.
 // IMPORTANT: Both spotter and spotted must parse as valid callsigns (core B part must be 3+ chars)
 // and frequency must look valid (numeric). This validates the semantic correctness of the spot.
+// lenientDXRegex is pre-compiled for tryLenientParseDX to avoid per-call allocation.
+var lenientDXRegex = regexp.MustCompile(`^(DX de)\s+([A-Z0-9_\/\-#]+)\s*:?\s*([0-9]+(?:\.[0-9]+)?)\s+([A-Z0-9_\/\-#]+)\s*(.*?)\s+(\d{4})Z`)
+
 func tryLenientParseDX(dxString string) (string, string, string, string, bool) {
-	// Lenient regex: allows shorter tokens (1+ chars) and more flexible spacing.
-	// This is a fallback for lines that don't match the strict format.
-	lenientRegex := regexp.MustCompile(`^(DX de)\s+([A-Z0-9_\/\-#]+)\s*:?\s*([0-9]+(?:\.[0-9]+)?)\s+([A-Z0-9_\/\-#]+)\s*(.*?)\s+(\d{4})Z`)
-	m := lenientRegex.FindStringSubmatch(dxString)
+	m := lenientDXRegex.FindStringSubmatch(dxString)
 	if len(m) < 5 { // Need at least groups: full match, DX de, spotter, freq, spotted
 		return "", "", "", "", false
 	}

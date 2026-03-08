@@ -33,6 +33,9 @@ type ParsedCallsign struct {
 	Raw      string // Cleaned for regex matching (uppercase, trimmed)
 }
 
+// reCallsignParts pre-compiled regex for ParseCallsign A/B/C tokenization.
+var reCallsignParts = regexp.MustCompile(`^((\d|[A-Z])+\/)?((\d|[A-Z]){3,})(\/(\d|[A-Z])+)?(\/(\d|[A-Z])+)?$`)
+
 // ParseCallsign tokenizes a raw callsign into A/B/C structure (prefix/callsign/suffix).
 // Does NOT apply DXCC special rules; that is done by LookupDXCC.
 func ParseCallsign(raw string) ParsedCallsign {
@@ -46,12 +49,7 @@ func ParseCallsign(raw string) ParsedCallsign {
 	cleaned := NormalizeCallsign(raw)
 	result.Raw = cleaned
 
-	// Regex: (A/)?(B)(/C)?(/C2)?
-	// A = prefix with trailing /
-	// B = core callsign (3+ alphanum)
-	// C = suffix with leading /
-	re := regexp.MustCompile(`^((\d|[A-Z])+\/)?((\d|[A-Z]){3,})(\/(\d|[A-Z])+)?(\/(\d|[A-Z])+)?$`)
-	matches := re.FindStringSubmatch(cleaned)
+	matches := reCallsignParts.FindStringSubmatch(cleaned)
 
 	if matches == nil {
 		// No slashes; treat entire string as B (callsign)

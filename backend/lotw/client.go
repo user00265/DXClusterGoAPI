@@ -407,12 +407,12 @@ func (c *Client) fetchAndStoreUsers(ctx context.Context) error {
 	return nil
 }
 
+// validCallsignPattern matches amateur radio callsigns: letters, numbers, and slashes only.
+var validCallsignPattern = regexp.MustCompile(`^[A-Z0-9/]+$`)
+
 // isValidCallsign validates that a callsign contains only alphanumeric characters and slashes.
 // This prevents SQL injection by ensuring only safe characters are in the callsign field.
 func isValidCallsign(callsign string) bool {
-	// Amateur radio callsigns contain letters, numbers, and slashes only
-	// Examples: W1AW, N0CALL, VE3/W1AW, KH0/W1AW
-	validCallsignPattern := regexp.MustCompile(`^[A-Z0-9/]+$`)
 	return len(callsign) > 0 && len(callsign) <= 20 && validCallsignPattern.MatchString(callsign)
 }
 
