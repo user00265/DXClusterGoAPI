@@ -102,6 +102,10 @@ type Config struct {
 	RawClustersJSON string          `env:"CLUSTERS"`
 	Clusters        []ClusterConfig `env:"-"` // Will be populated from RawClustersJSON
 
+	// Single-cluster shorthand — used when CLUSTERS JSON is not set
+	DXHost string `env:"DXHOST"`
+	DXPort string `env:"DXPORT" envDefault:"7300"`
+
 	// Global CALLSIGN - used for all clusters that don't specify their own
 	Callsign string `env:"CALLSIGN"`
 
@@ -158,11 +162,23 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// --- DX Cluster Configuration Logic ---
-	// Only use CLUSTERS JSON - no more legacy support
+	// If CLUSTERS JSON is provided it takes full precedence.
+	// Otherwise fall back to the single-cluster DXHOST/DXPORT/CALLSIGN shorthand.
 	if cfg.RawClustersJSON != "" {
-		// Use CLUSTERS JSON if provided
 		if err := json.Unmarshal([]byte(cfg.RawClustersJSON), &cfg.Clusters); err != nil {
 			return nil, fmt.Errorf("failed to parse CLUSTERS JSON: %w", err)
+		}
+	} else if cfg.DXHost != "" {
+		port := cfg.DXPort
+		if port == "" {
+			port = DefaultDXCPort
+		}
+		cfg.Clusters = []ClusterConfig{
+			{
+				Host:     cfg.DXHost,
+				Port:     FlexiblePort(port),
+				Callsign: cfg.Callsign,
+			},
 		}
 	}
 
