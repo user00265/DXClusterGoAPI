@@ -8,7 +8,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-redis/redis/v8 v8.11.5
-	golang.org/x/net v0.55.0
+	golang.org/x/net v0.56.0
 )
 
 require (
@@ -45,9 +45,9 @@ require (
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	golang.org/x/arch v0.22.0 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/crypto v0.53.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.38.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gorm.io/gorm v1.25.7 // indirect
 	modernc.org/libc v1.41.0 // indirect
