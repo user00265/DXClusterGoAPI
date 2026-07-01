@@ -1,3 +1,7 @@
+# Archived
+
+This code has been archived as of June 30, 2026. DXCacheAPI has moved onto v2 and added extra functions specific to Wavelog usage and I have since decided to not continue this project at this time. I may re-evaluate in the future, but for now it shall be archived.
+
 # DXClusterGoAPI
 
 [![Release Build Status](https://github.com/user00265/dxclustergoapi/actions/workflows/build-release.yml/badge.svg)](https://github.com/user00265/dxclustergoapi/actions/workflows/build-release.yml)
